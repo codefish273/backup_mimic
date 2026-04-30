@@ -28,7 +28,7 @@ def g1_steering_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     rand_tar_dir=True,
     rand_face_dir=True,
     tar_speed_min=0.5,
-    tar_speed_max=3.0,
+    tar_speed_max=3.5,
     debug_vis=True,
   )
 
@@ -44,17 +44,18 @@ def g1_steering_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   cfg.rewards["steering_target_velocity"] = RewardTermCfg(
     func=mdp.steering_target_velocity,
     weight=0.7,
-    params={"command_name": "steering", "vel_err_scale": 0.5},
+    params={"command_name": "steering", "vel_err_scale": 1.0},
   )
   cfg.rewards["steering_face_direction"] = RewardTermCfg(
     func=mdp.steering_face_direction,
     weight=0.3,
     params={"command_name": "steering"},
   )
+  cfg.rewards["smp_guidance"].params["ws"] = 6.0
 
   # --- Events --------------------------------------------------------------
   cfg.events["init_smp_state"].params["ckpt_path"] = (
-    "datasets/pretrain_ckpt/pretrained_loco.pt"
+    "datasets/pretrain_ckpt/pretrained_lafan_run.pt"
   )
 
   # --- Terminations --------------------------------------------------------
