@@ -346,7 +346,7 @@ class CMoEPPO:
     actor_class = resolve_callable(cfg["actor"].pop("class_name"))
     cfg["critic"].pop("class_name")
     cfg["obs_groups"] = resolve_obs_groups(obs, cfg["obs_groups"], ["actor", "critic"])
-    cfg["algorithm"].pop("share_cnn_encoders", None)
+    cfg["algorithm"].pop("share_cnn_encoders")
     cfg["algorithm"].pop("normalize_advantage_per_mini_batch")
     cfg["actor"].pop("cnn_cfg")
     cfg["actor"].pop("rnn_type")

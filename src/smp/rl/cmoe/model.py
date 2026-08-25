@@ -345,7 +345,7 @@ class CMoEModel(nn.Module):
     super().__init__()
     self.obs_groups = obs_groups[obs_set]
     self.obs_dim = sum(obs[group].shape[-1] for group in self.obs_groups)
-    self.critic_groups = obs_groups.get("critic", self.obs_groups)
+    self.critic_groups = obs_groups["critic"]
     self.critic_obs_dim = sum(obs[group].shape[-1] for group in self.critic_groups)
     self.obs_normalization = obs_normalization
     self.critic_obs_normalization = False
@@ -432,9 +432,8 @@ class CMoEModel(nn.Module):
     )
     self.prototypes = nn.Embedding(num_prototypes, 16)
 
-    cfg = dict(distribution_cfg or {})
     self.distribution = CMoEGaussianDistribution(
-      output_dim, init_std=cfg.get("init_std", 1.0)
+      output_dim, init_std=distribution_cfg["init_std"]
     )
     self.gate_weights = torch.empty(0)
 
