@@ -49,12 +49,11 @@ class CMoEPPO:
     device: str = "cpu",
     multi_gpu_cfg: dict[str, Any] | None = None,
     obs_groups: dict[str, list[str]] | None = None,
-    contrastive_loss_coef: float = 1.0,
-    **_: Any,
   ) -> None:
     self.device = device
     self.actor = actor.to(device)
     self.critic = critic.to(device)
+    self.actor_critic = self.actor
     self._raw_actor = self.actor
     self._raw_critic = self.critic
     self.storage = storage
@@ -73,7 +72,6 @@ class CMoEPPO:
     self.lam = lam
     self.max_grad_norm = max_grad_norm
     self.use_clipped_value_loss = use_clipped_value_loss
-    self.contrastive_loss_coef = contrastive_loss_coef
 
     self.is_multi_gpu = multi_gpu_cfg is not None
     if self.is_multi_gpu:
@@ -93,11 +91,11 @@ class CMoEPPO:
     """Compute and record the action and both observations for one step."""
     self.transition.actions = self.actor.act(obs).detach()
     self.transition.values = self.actor.evaluate(obs).detach()
-    self.transition.actions_log_prob = self.actor.get_actions_log_prob(
+    self.transition.actions_log_prob = self.actor.get_output_log_prob(
       self.transition.actions
     ).detach()
-    self.transition.action_mean = self.actor.action_mean.detach()
-    self.transition.action_sigma = self.actor.action_std.detach()
+    self.transition.action_mean = self.actor.output_mean.detach()
+    self.transition.action_sigma = self.actor.output_std.detach()
     self.transition.observations = obs
     self.transition.critic_observations = self._select_obs(obs, "critic")
     return self.transition.actions
@@ -112,9 +110,9 @@ class CMoEPPO:
   ) -> None:
     """Store a step, keeping terminal privileged data before reset."""
     self.transition.next_critic_observations = (
-      next_critic_obs
+      next_critic_obs.clone()
       if next_critic_obs is not None
-      else self._select_obs(obs, "critic")
+      else self._select_obs(obs, "critic").clone()
     )
     self.transition.rewards = rewards.clone()
     self.transition.dones = dones
@@ -151,11 +149,11 @@ class CMoEPPO:
       self.num_mini_batches, self.num_learning_epochs
     ):
       self.actor.act(batch.observations)
-      actions_log_prob = self.actor.get_actions_log_prob(batch.actions)
+      actions_log_prob = self.actor.get_output_log_prob(batch.actions)
       value = self.actor.evaluate(batch.critic_observations)
-      mu = self.actor.action_mean
-      sigma = self.actor.action_std
-      entropy = self.actor.entropy
+      mu = self.actor.output_mean
+      sigma = self.actor.output_std
+      entropy = self.actor.output_entropy
       entropy_mean += entropy.mean().item()
 
       if self.desired_kl is not None and self.schedule == "adaptive":
@@ -213,7 +211,7 @@ class CMoEPPO:
         surrogate_loss
         + self.value_loss_coef * value_loss
         - self.entropy_coef * entropy.mean()
-        + self.contrastive_loss_coef * contrastive_loss
+        + contrastive_loss
       )
       self.optimizer.zero_grad()
       loss.backward()
@@ -271,31 +269,24 @@ class CMoEPPO:
       "actor_state_dict": self._raw_actor.state_dict(),
       "critic_state_dict": self._raw_critic.state_dict(),
       "optimizer_state_dict": self.optimizer.state_dict(),
-      "state_estimator_optimizer_state_dict": self._raw_actor.state_estimator.optimizer.state_dict(),
-      "terrain_estimator_optimizer_state_dict": self._raw_actor.terrain_estimator.optimizer.state_dict(),
     }
 
   def load(
     self, loaded_dict: dict[str, Any], load_cfg: dict[str, bool] | None, strict: bool
   ) -> bool:
-    load_cfg = load_cfg or {
-      "actor": True,
-      "critic": True,
-      "optimizer": True,
-      "iteration": True,
-    }
+    if load_cfg is None:
+      load_cfg = {
+        "actor": True,
+        "critic": True,
+        "optimizer": True,
+        "iteration": True,
+      }
     if load_cfg.get("actor"):
       self._raw_actor.load_state_dict(loaded_dict["actor_state_dict"], strict=strict)
     if load_cfg.get("critic") and self._raw_critic is not self._raw_actor:
       self._raw_critic.load_state_dict(loaded_dict["critic_state_dict"], strict=strict)
     if load_cfg.get("optimizer"):
       self.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])
-      self._raw_actor.state_estimator.optimizer.load_state_dict(
-        loaded_dict["state_estimator_optimizer_state_dict"]
-      )
-      self._raw_actor.terrain_estimator.optimizer.load_state_dict(
-        loaded_dict["terrain_estimator_optimizer_state_dict"]
-      )
     return load_cfg.get("iteration", False)
 
   def get_policy(self) -> nn.Module:
@@ -355,8 +346,12 @@ class CMoEPPO:
     actor_class = resolve_callable(cfg["actor"].pop("class_name"))
     cfg["critic"].pop("class_name")
     cfg["obs_groups"] = resolve_obs_groups(obs, cfg["obs_groups"], ["actor", "critic"])
-    cfg["algorithm"].setdefault("rnd_cfg", None)
     cfg["algorithm"].pop("share_cnn_encoders", None)
+    cfg["algorithm"].pop("normalize_advantage_per_mini_batch")
+    cfg["actor"].pop("cnn_cfg")
+    cfg["actor"].pop("rnn_type")
+    cfg["actor"].pop("rnn_hidden_dim")
+    cfg["actor"].pop("rnn_num_layers")
 
     actor = actor_class(
       obs,

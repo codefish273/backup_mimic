@@ -20,10 +20,7 @@ class CMoEModelCfg(RslRlModelCfg):
   critic_hidden_dims: tuple[int, ...] = (512, 256, 128)
   distribution_cfg: dict[str, Any] = field(
     default_factory=lambda: {
-      "class_name": "GaussianDistribution",
       "init_std": 1.0,
-      "std_type": "scalar",
-      "learn_std": True,
     }
   )
   num_one_step_obs: int = 45
@@ -46,8 +43,19 @@ class CMoEModelCfg(RslRlModelCfg):
 @dataclass
 class CMoEPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
   class_name: str = "smp.rl.cmoe.algorithm:CMoEPPO"
+  value_loss_coef: float = 1.0
+  use_clipped_value_loss: bool = True
+  clip_param: float = 0.2
   entropy_coef: float = 0.01
-  contrastive_loss_coef: float = 1.0
+  num_learning_epochs: int = 5
+  num_mini_batches: int = 4
+  learning_rate: float = 1e-3
+  schedule: str = "adaptive"
+  gamma: float = 0.99
+  lam: float = 0.95
+  desired_kl: float = 0.01
+  max_grad_norm: float = 1.0
+  optimizer: str = "adam"
 
 
 def g1_cmoe_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
@@ -60,8 +68,8 @@ def g1_cmoe_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       "actor": ("actor",),
       "critic": ("critic",),
     },
-    experiment_name="cmoe_g1",
-    run_name="cmoe_g1",
+    experiment_name="g1_cmoe",
+    run_name="cmoe",
     save_interval=200,
     num_steps_per_env=24,
     max_iterations=50_000,

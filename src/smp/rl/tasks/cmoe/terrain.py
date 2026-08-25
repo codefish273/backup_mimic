@@ -9,17 +9,18 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import mujoco
 import numpy as np
+import torch
 from mjlab.terrains.terrain_generator import (
   SubTerrainCfg,
   TerrainGeneratorCfg,
   TerrainGeometry,
   TerrainOutput,
 )
-from scipy import interpolate
+from scipy import interpolate, ndimage
 
 _HORIZONTAL_SCALE = 0.05
 _COLLISION_SCALE = 0.1
@@ -42,13 +43,29 @@ CMOE_COLUMN_KINDS = (
   + ("mix",) * 4
   + ("narrow_stairs",) * 4
 )
-
-# Values match HumanoidCfg.terrain.terrain_dict indexes.  This is kept next
-# to the column layout so reward/termination code can use the original class.
-CMOE_TERRAIN_TYPE_BY_COLUMN = np.array(
-  [1] * 4 + [2] * 4 + [3] * 4 + [4] * 4 + [5] * 12 + [8] * 4 + [9] * 4 + [10] * 4,
-  dtype=np.int64,
+CMOE_PLAY_COLUMN_KINDS = (
+  "rough_neg",
+  "stairs_up",
+  "stairs_down",
+  "discrete",
+  "parkour_gap",
+  "parkour_gap",
+  "parkour_gap",
+  "parkour_hurdle",
+  "mix",
+  "narrow_stairs",
 )
+CMOE_TERRAIN_CLASS = {
+  "rough_neg": 1,
+  "rough_pos": 1,
+  "stairs_up": 2,
+  "stairs_down": 3,
+  "discrete": 4,
+  "parkour_gap": 5,
+  "parkour_hurdle": 8,
+  "mix": 9,
+  "narrow_stairs": 10,
+}
 
 
 def _random_uniform(
@@ -134,14 +151,14 @@ def _discrete_obstacles(
 def _parkour_gap(raw: np.ndarray, difficulty: float, rng: np.random.Generator) -> None:
   mid_y = raw.shape[1] // 2
   platform_len = int(1.0 / _HORIZONTAL_SCALE)
-  gap_depth = -int(rng.uniform(0.5, 1.5) / _VERTICAL_SCALE)
-  half_valid_width = int(
+  gap_depth = -round(rng.uniform(0.5, 1.5) / _VERTICAL_SCALE)
+  half_valid_width = round(
     rng.uniform(1 - 0.5 * difficulty, 1.5 - 0.5 * difficulty) / _HORIZONTAL_SCALE
   )
   raw[:platform_len, :] = 0
-  gap_size = int((0.1 + 0.7 * difficulty) / _HORIZONTAL_SCALE)
-  dis_x_min = int(0.8 / _HORIZONTAL_SCALE) + gap_size
-  dis_x_max = int(1.4 / _HORIZONTAL_SCALE) + gap_size
+  gap_size = round((0.1 + 0.7 * difficulty) / _HORIZONTAL_SCALE)
+  dis_x_min = round(0.8 / _HORIZONTAL_SCALE) + gap_size
+  dis_x_max = round(1.4 / _HORIZONTAL_SCALE) + gap_size
   dis_x = platform_len
   last_dis_x = dis_x
   for _ in range(4):
@@ -161,12 +178,12 @@ def _parkour_gap(raw: np.ndarray, difficulty: float, rng: np.random.Generator) -
 def _parkour_hurdle(
   raw: np.ndarray, difficulty: float, rng: np.random.Generator
 ) -> None:
-  platform_len = int(1.0 / _HORIZONTAL_SCALE)
-  stone_len = int((0.1 + 0.2 * difficulty) / _HORIZONTAL_SCALE)
-  height_min = int((0.2 * difficulty) / _VERTICAL_SCALE)
-  height_max = int((0.15 + 0.25 * difficulty) / _VERTICAL_SCALE)
-  dis_x_min = int(1.2 / _HORIZONTAL_SCALE)
-  dis_x_max = int(2.0 / _HORIZONTAL_SCALE)
+  platform_len = round(1.0 / _HORIZONTAL_SCALE)
+  stone_len = round((0.1 + 0.2 * difficulty) / _HORIZONTAL_SCALE)
+  height_min = round((0.2 * difficulty) / _VERTICAL_SCALE)
+  height_max = round((0.15 + 0.25 * difficulty) / _VERTICAL_SCALE)
+  dis_x_min = round(1.2 / _HORIZONTAL_SCALE)
+  dis_x_max = round(2.0 / _HORIZONTAL_SCALE)
   raw[:platform_len, :] = 0
   dis_x = platform_len
   for _ in range(4):
@@ -213,9 +230,9 @@ def _narrow_stairs(
 ) -> None:
   mid_y = raw.shape[1] // 2
   num_stones = 24
-  step_height = int(0.25 * difficulty / _VERTICAL_SCALE)
-  half_valid_width = int((1.0 - 0.5 * difficulty) / _HORIZONTAL_SCALE)
-  platform_len = int(1.0 / _HORIZONTAL_SCALE)
+  step_height = round(0.25 * difficulty / _VERTICAL_SCALE)
+  half_valid_width = round((1.0 - 0.5 * difficulty) / _HORIZONTAL_SCALE)
+  platform_len = round(1.0 / _HORIZONTAL_SCALE)
   raw[:platform_len, :] = 0
   dis_x = platform_len
   stair_height = 0
@@ -249,10 +266,10 @@ def _make_raw(kind: str, difficulty: float, rng: np.random.Generator) -> np.ndar
     _pyramid_slope(raw, (-1 if kind == "rough_neg" else 1) * 0.4 * difficulty)
     _random_uniform(raw, difficulty, rng)
   elif kind == "stairs_up":
-    _pyramid_stairs(raw, 0.05 + 0.18 * difficulty)
+    _pyramid_stairs(raw, -(0.05 + 0.18 * difficulty))
     _random_uniform(raw, difficulty, rng)
   elif kind == "stairs_down":
-    _pyramid_stairs(raw, -(0.05 + 0.18 * difficulty))
+    _pyramid_stairs(raw, 0.05 + 0.18 * difficulty)
     _random_uniform(raw, difficulty, rng)
   elif kind == "discrete":
     _discrete_obstacles(raw, difficulty, rng)
@@ -278,8 +295,6 @@ def _heightfield_output(
   spawn_at_center: bool,
 ) -> TerrainOutput:
   body = spec.body("terrain")
-  # MJWarp limits each heightfield-geom pair to 50 contacts. Keep the original
-  # 5 cm generation grid and use the standard 10 cm collision resolution.
   collision_stride = round(_COLLISION_SCALE / _HORIZONTAL_SCALE)
   collision_raw = raw[::collision_stride, ::collision_stride]
   minimum = int(collision_raw.min())
@@ -293,7 +308,7 @@ def _heightfield_output(
       _TERRAIN_SIZE[0] / 2,
       _TERRAIN_SIZE[1] / 2,
       elevation_range * _VERTICAL_SCALE,
-      max(elevation_range * _VERTICAL_SCALE, 0.05),
+      0.05,
     ],
     nrow=collision_raw.shape[1],
     ncol=collision_raw.shape[0],
@@ -311,9 +326,9 @@ def _heightfield_output(
     friction=(0.8, 0.005, 0.0001),
   )
   if spawn_at_center:
-    x1, x2 = int(4.0 / _COLLISION_SCALE), int(6.0 / _COLLISION_SCALE)
-    y1, y2 = int(4.0 / _COLLISION_SCALE), int(6.0 / _COLLISION_SCALE)
-    spawn_height = float(collision_raw[x1:x2, y1:y2].max() * _VERTICAL_SCALE)
+    x1, x2 = int(4.0 / _HORIZONTAL_SCALE), int(6.0 / _HORIZONTAL_SCALE)
+    y1, y2 = int(4.0 / _HORIZONTAL_SCALE), int(6.0 / _HORIZONTAL_SCALE)
+    spawn_height = float(raw[x1:x2, y1:y2].max() * _VERTICAL_SCALE)
   else:
     spawn_height = 0.0
   spawn_x = _TERRAIN_SIZE[0] / 2 if spawn_at_center else 0.75
@@ -328,6 +343,7 @@ class CMoETerrainCfg(SubTerrainCfg):
   kind: str
   horizontal_scale: float = _HORIZONTAL_SCALE
   vertical_scale: float = _VERTICAL_SCALE
+  height_fields: list[np.ndarray] = field(default_factory=list, init=False, repr=False)
 
   def function(
     self, difficulty: float, spec: mujoco.MjSpec, rng: np.random.Generator
@@ -335,6 +351,7 @@ class CMoETerrainCfg(SubTerrainCfg):
     # TerrainGenerator adds a sub-row jitter. Recover the original row value.
     difficulty = np.floor(difficulty * 10.0) / 10.0
     raw = _make_raw(self.kind, difficulty, rng)
+    self.height_fields.append(raw)
     return _heightfield_output(
       raw,
       spec,
@@ -348,30 +365,137 @@ class CMoETerrainCfg(SubTerrainCfg):
     )
 
 
-def cmoe_terrain_generator_cfg() -> TerrainGeneratorCfg:
+def cmoe_terrain_generator_cfg(play: bool = False) -> TerrainGeneratorCfg:
+  column_kinds = CMOE_PLAY_COLUMN_KINDS if play else CMOE_COLUMN_KINDS
   sub_terrains = {
     f"{kind}_{column:02d}": CMoETerrainCfg(
-      proportion=0.025,
+      proportion=1.0 / len(column_kinds),
       kind=kind,
     )
-    for column, kind in enumerate(CMOE_COLUMN_KINDS)
+    for column, kind in enumerate(column_kinds)
   }
   return TerrainGeneratorCfg(
-    seed=0,
+    seed=None,
     curriculum=True,
     size=_TERRAIN_SIZE,
     border_width=25.0,
     num_rows=10,
-    num_cols=40,
+    num_cols=len(column_kinds),
     color_scheme="none",
     sub_terrains=sub_terrains,
     add_lights=True,
   )
 
 
+def cmoe_height_field(env) -> torch.Tensor:
+  if not hasattr(env, "cmoe_terrain_data"):
+    generator = env.cfg.scene.terrain.terrain_generator
+    columns = [cfg.height_fields for cfg in generator.sub_terrains.values()]
+    patches = np.asarray(columns).transpose(1, 2, 0, 3)
+    terrain = patches.reshape(
+      generator.num_rows * patches.shape[1], len(columns) * patches.shape[3]
+    )
+    border = round(generator.border_width / _HORIZONTAL_SCALE)
+    terrain = np.pad(terrain, border)
+    threshold = 1.5 * _HORIZONTAL_SCALE / _VERTICAL_SCALE
+    move_x = np.zeros_like(terrain, dtype=np.int8)
+    move_y = np.zeros_like(terrain, dtype=np.int8)
+    move_corner = np.zeros_like(terrain, dtype=np.int8)
+    move_x[:-1] += terrain[1:] - terrain[:-1] > threshold
+    move_x[1:] -= terrain[:-1] - terrain[1:] > threshold
+    move_y[:, :-1] += terrain[:, 1:] - terrain[:, :-1] > threshold
+    move_y[:, 1:] -= terrain[:, :-1] - terrain[:, 1:] > threshold
+    move_corner[:-1, :-1] += terrain[1:, 1:] - terrain[:-1, :-1] > threshold
+    move_corner[1:, 1:] -= terrain[:-1, :-1] - terrain[1:, 1:] > threshold
+    edge_mask = ndimage.binary_dilation(
+      (move_x != 0) | (move_y != 0) | (move_corner != 0),
+      structure=np.ones((3, 3)),
+    )
+    env.cmoe_terrain_data = (
+      torch.as_tensor(terrain, dtype=torch.int16, device=env.device),
+      torch.as_tensor(edge_mask, dtype=torch.bool, device=env.device),
+    )
+  return env.cmoe_terrain_data[0]
+
+
+def cmoe_edge_mask(env) -> torch.Tensor:
+  cmoe_height_field(env)
+  return env.cmoe_terrain_data[1]
+
+
+def cmoe_height_indices(env, points: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+  generator = env.cfg.scene.terrain.terrain_generator
+  border = generator.border_width
+  grid_x = generator.num_rows * generator.size[0]
+  grid_y = len(generator.sub_terrains) * generator.size[1]
+  px = ((points[..., 0] + grid_x / 2 + border) / _HORIZONTAL_SCALE).long()
+  py = ((points[..., 1] + grid_y / 2 + border) / _HORIZONTAL_SCALE).long()
+  height_field = cmoe_height_field(env)
+  return px.clamp(0, height_field.shape[0] - 2), py.clamp(0, height_field.shape[1] - 2)
+
+
+def cmoe_scan_heights(env, points: torch.Tensor) -> torch.Tensor:
+  height_field = cmoe_height_field(env)
+  px, py = cmoe_height_indices(env, points)
+  heights = torch.stack(
+    (
+      height_field[px, py],
+      height_field[px, py],
+      height_field[px + 1, py],
+      height_field[px - 1, py],
+    )
+  ).float()
+  return heights.mean(dim=0) * _VERTICAL_SCALE
+
+
+def cmoe_foot_heights(env, points: torch.Tensor) -> torch.Tensor:
+  height_field = cmoe_height_field(env)
+  px, py = cmoe_height_indices(env, points)
+  heights = torch.stack(
+    (
+      height_field[px, py],
+      height_field[px + 1, py],
+      height_field[px, py + 1],
+    )
+  ).float()
+  return points[..., 2] - heights.mean(dim=0) * _VERTICAL_SCALE
+
+
+def cmoe_feet_at_edge(env, points: torch.Tensor) -> torch.Tensor:
+  edge_mask = cmoe_edge_mask(env)
+  generator = env.cfg.scene.terrain.terrain_generator
+  border = generator.border_width
+  grid_x = generator.num_rows * generator.size[0]
+  grid_y = len(generator.sub_terrains) * generator.size[1]
+  px = ((points[..., 0] + grid_x / 2 + border) / _HORIZONTAL_SCALE).round().long()
+  py = ((points[..., 1] + grid_y / 2 + border) / _HORIZONTAL_SCALE).round().long()
+  px = px.clamp(0, edge_mask.shape[0] - 1)
+  py = py.clamp(0, edge_mask.shape[1] - 1)
+  return edge_mask[px, py]
+
+
+def cmoe_terrain_class(env) -> torch.Tensor:
+  columns = env.scene.terrain.terrain_types
+  classes = torch.tensor(
+    [
+      CMOE_TERRAIN_CLASS[cfg.kind]
+      for cfg in env.cfg.scene.terrain.terrain_generator.sub_terrains.values()
+    ],
+    device=env.device,
+  )
+  return classes[columns]
+
+
 __all__ = [
   "CMOE_COLUMN_KINDS",
-  "CMOE_TERRAIN_TYPE_BY_COLUMN",
+  "CMOE_PLAY_COLUMN_KINDS",
+  "CMOE_TERRAIN_CLASS",
   "CMoETerrainCfg",
+  "cmoe_edge_mask",
+  "cmoe_feet_at_edge",
+  "cmoe_foot_heights",
+  "cmoe_height_field",
+  "cmoe_scan_heights",
+  "cmoe_terrain_class",
   "cmoe_terrain_generator_cfg",
 ]

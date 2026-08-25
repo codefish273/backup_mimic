@@ -10,6 +10,12 @@ from mjlab.entity import Entity
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.sensor import ContactSensor
 
+from smp.rl.tasks.cmoe.terrain import cmoe_terrain_class
+
+
+def time_out(env) -> torch.Tensor:
+  return env.episode_length_buf > env.max_episode_length
+
 
 def pelvis_contact(env, sensor_name: str) -> torch.Tensor:
   sensor: ContactSensor = env.scene[sensor_name]
@@ -32,10 +38,14 @@ def bad_orientation(env, limit_angle: float, asset_cfg: SceneEntityCfg) -> torch
 
 def root_height_below_on_terrain(env, minimum_height: float) -> torch.Tensor:
   robot = env.scene["robot"]
-  terrain = env.scene.terrain
   return (robot.data.root_link_pos_w[:, 2] < minimum_height) & (
-    (terrain.terrain_types >= 16) & (terrain.terrain_types <= 27)
+    cmoe_terrain_class(env) == 5
   )
 
 
-__all__ = ["bad_orientation", "pelvis_contact", "root_height_below_on_terrain"]
+__all__ = [
+  "bad_orientation",
+  "pelvis_contact",
+  "root_height_below_on_terrain",
+  "time_out",
+]

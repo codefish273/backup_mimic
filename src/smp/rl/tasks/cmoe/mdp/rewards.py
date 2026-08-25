@@ -10,8 +10,14 @@ from typing import TYPE_CHECKING
 import torch
 from mjlab.entity import Entity
 from mjlab.managers.scene_entity_config import SceneEntityCfg
-from mjlab.sensor import ContactSensor, TerrainHeightSensor
+from mjlab.sensor import ContactSensor
 from mjlab.utils.lab_api.math import quat_apply_inverse, wrap_to_pi
+
+from smp.rl.tasks.cmoe.terrain import (
+  cmoe_feet_at_edge,
+  cmoe_foot_heights,
+  cmoe_terrain_class,
+)
 
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
 
@@ -91,6 +97,7 @@ def orientation(
 def base_height(
   env: "ManagerBasedRlEnv",
   contact_sensor_name: str,
+  target_height: float,
   foot_height: float,
   asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
@@ -98,10 +105,10 @@ def base_height(
   feet = asset.data.site_pos_w[:, asset_cfg.site_ids, 2]
   contact = _contact_filter(env, contact_sensor_name).float()
   count = contact.sum(dim=1)
-  feet_z = torch.sum(feet * contact, dim=1) / count.clamp_min(1.0)
+  feet_z = torch.sum(feet * contact, dim=1) / count
   feet_z = torch.where(count > 0, feet_z, feet.mean(dim=1))
   height = asset.data.root_link_pos_w[:, 2] - (feet_z - foot_height)
-  return torch.square(height - 0.75)
+  return torch.square(height - target_height)
 
 
 def feet_stumble(env: "ManagerBasedRlEnv", sensor_name: str) -> torch.Tensor:
@@ -170,24 +177,25 @@ def feet_slip(env: "ManagerBasedRlEnv", sensor_name: str) -> torch.Tensor:
   return torch.sum(speed * (contact > 0).float(), dim=1)
 
 
-def feet_ground_parallel(env: "ManagerBasedRlEnv", sensor_name: str) -> torch.Tensor:
-  sensor: TerrainHeightSensor = env.scene[sensor_name]
-  heights = sensor.data.heights
+def feet_ground_parallel(
+  env: "ManagerBasedRlEnv", asset_cfg: SceneEntityCfg
+) -> torch.Tensor:
+  asset = _asset(env, asset_cfg)
+  heights = cmoe_foot_heights(env, asset.data.site_pos_w[:, asset_cfg.site_ids])
   return torch.var(heights[:, :5], dim=-1) + torch.var(heights[:, 5:], dim=-1)
 
 
 def feet_edge(
   env: "ManagerBasedRlEnv",
-  height_sensor_name: str,
   contact_sensor_name: str,
-  edge_threshold: float = 0.05,
+  asset_cfg: SceneEntityCfg,
 ) -> torch.Tensor:
-  height_sensor: TerrainHeightSensor = env.scene[height_sensor_name]
-  heights = height_sensor.data.heights.view(env.num_envs, 2, 5)
-  at_edge = heights.amax(dim=-1) - heights.amin(dim=-1) > edge_threshold
+  asset = _asset(env, asset_cfg)
+  at_edge = cmoe_feet_at_edge(env, asset.data.site_pos_w[:, asset_cfg.site_ids])
   in_contact = _contact_filter(env, contact_sensor_name)
   terrain = env.scene.terrain
-  exclude = (terrain.terrain_types >= 4) & (terrain.terrain_types <= 15)
+  terrain_class = cmoe_terrain_class(env)
+  exclude = (terrain_class == 2) | (terrain_class == 3) | (terrain_class == 4)
   reward = (at_edge & in_contact).sum(dim=-1) * (terrain.terrain_levels > 3)
   return reward * ~exclude
 
@@ -201,9 +209,13 @@ def hip_dof_error(env: "ManagerBasedRlEnv", asset_cfg: SceneEntityCfg) -> torch.
 
 
 def dof_acc(env: "ManagerBasedRlEnv", asset_cfg: SceneEntityCfg) -> torch.Tensor:
-  return torch.sum(
-    torch.square(_asset(env, asset_cfg).data.joint_acc[:, asset_cfg.joint_ids]), dim=1
-  )
+  velocity = _asset(env, asset_cfg).data.joint_vel[:, asset_cfg.joint_ids]
+  if not hasattr(env, "cmoe_last_joint_vel"):
+    env.cmoe_last_joint_vel = torch.zeros_like(velocity)
+  env.cmoe_last_joint_vel[env.episode_length_buf <= 1] = 0.0
+  acceleration = (env.cmoe_last_joint_vel - velocity) / env.step_dt
+  env.cmoe_last_joint_vel.copy_(velocity)
+  return torch.sum(torch.square(acceleration), dim=1)
 
 
 def dof_vel(env: "ManagerBasedRlEnv", asset_cfg: SceneEntityCfg) -> torch.Tensor:

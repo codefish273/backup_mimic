@@ -138,6 +138,19 @@ class RolloutStorage:
   def clear(self) -> None:
     self.step = 0
 
+  def get_statistics(self) -> tuple[torch.Tensor, torch.Tensor]:
+    done = self.dones
+    done[-1] = 1
+    flat_dones = done.permute(1, 0, 2).reshape(-1, 1)
+    done_indices = torch.cat(
+      (
+        flat_dones.new_tensor([-1], dtype=torch.int64),
+        flat_dones.nonzero(as_tuple=False)[:, 0],
+      )
+    )
+    trajectory_lengths = done_indices[1:] - done_indices[:-1]
+    return trajectory_lengths.float().mean(), self.rewards.mean()
+
   def compute_returns(
     self, last_values: torch.Tensor, gamma: float, lam: float
   ) -> None:

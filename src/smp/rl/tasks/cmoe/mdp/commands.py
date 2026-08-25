@@ -19,8 +19,7 @@ class CMoEVelocityCommand(UniformVelocityCommand):
 
   def _resample_command(self, env_ids: torch.Tensor) -> None:
     super()._resample_command(env_ids)
-    terrain_types = self._env.scene.terrain.terrain_types
-    hard_ids = env_ids[terrain_types[env_ids] >= 4]
+    hard_ids = env_ids[env_ids >= self._env.num_envs * 0.1]
     sample = torch.empty(len(hard_ids), device=self.device)
     self.vel_command_b[hard_ids, 0] = sample.uniform_(*self.cfg.hard_ranges.lin_vel_x)
     self.vel_command_b[hard_ids, 1] = sample.uniform_(*self.cfg.hard_ranges.lin_vel_y)

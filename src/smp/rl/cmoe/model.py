@@ -18,10 +18,11 @@ from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from rsl_rl.modules import MLP, EmpiricalNormalization, GaussianDistribution
+from rsl_rl.modules import MLP, EmpiricalNormalization
 from rsl_rl.utils import resolve_nn_activation
 from tensordict import TensorDictBase
 from torch import Tensor
+from torch.distributions import Normal
 
 
 def _mlp(
@@ -38,6 +39,51 @@ def _mlp(
     activation,
     last_activation=last_activation,
   )
+
+
+class CMoEGaussianDistribution(nn.Module):
+  """The directly parameterized Gaussian used by the original CMoE policy."""
+
+  def __init__(self, output_dim: int, init_std: float = 1.0) -> None:
+    super().__init__()
+    self.std_param = nn.Parameter(init_std * torch.ones(output_dim))
+    self._distribution: Normal | None = None
+
+  def update(self, mean: Tensor) -> None:
+    self._distribution = Normal(mean, self.std_param, validate_args=False)
+
+  def sample(self) -> Tensor:
+    return self._distribution.sample()  # type: ignore[union-attr]
+
+  @property
+  def mean(self) -> Tensor:
+    return self._distribution.mean  # type: ignore[union-attr]
+
+  @property
+  def std(self) -> Tensor:
+    return self._distribution.stddev  # type: ignore[union-attr]
+
+  @property
+  def entropy(self) -> Tensor:
+    return self._distribution.entropy().sum(dim=-1)  # type: ignore[union-attr]
+
+  @property
+  def params(self) -> tuple[Tensor, Tensor]:
+    return self.mean, self.std
+
+  def log_prob(self, outputs: Tensor) -> Tensor:
+    return self._distribution.log_prob(outputs).sum(dim=-1)  # type: ignore[union-attr]
+
+  @staticmethod
+  def kl_divergence(
+    old_params: tuple[Tensor, Tensor], new_params: tuple[Tensor, Tensor]
+  ) -> Tensor:
+    old_mean, old_std = old_params
+    new_mean, new_std = new_params
+    return torch.distributions.kl_divergence(
+      Normal(old_mean, old_std, validate_args=False),
+      Normal(new_mean, new_std, validate_args=False),
+    ).sum(dim=-1)
 
 
 class StateEstimator(nn.Module):
@@ -58,7 +104,6 @@ class StateEstimator(nn.Module):
     use_estimation_loss: bool = True,
     use_latent_loss: bool = True,
     use_map_estimator: bool = False,
-    **_: Any,
   ) -> None:
     super().__init__()
     self.temporal_steps = temporal_steps
@@ -90,7 +135,8 @@ class StateEstimator(nn.Module):
       dec_hidden_dims,
       activation,
     )
-    self.optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+    self.learning_rate = learning_rate
+    self.optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
 
   def encode(self, obs_history: Tensor) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     result = self.encoder(obs_history[:, : self.history_dim].detach())
@@ -121,8 +167,9 @@ class StateEstimator(nn.Module):
     gradient_sync: Callable[[Iterable[nn.Parameter]], None] | None = None,
   ):
     if lr is not None:
+      self.learning_rate = lr
       for group in self.optimizer.param_groups:
-        group["lr"] = lr
+        group["lr"] = self.learning_rate
 
     explicit = critic_obs[
       :, self.num_one_step_obs : self.num_one_step_obs + self.explicit_dim
@@ -169,7 +216,6 @@ class TerrainEstimator(nn.Module):
     max_grad_norm: float = 10.0,
     use_latent_loss: bool = True,
     use_map_estimator: bool = False,
-    **_: Any,
   ) -> None:
     super().__init__()
     self.temporal_steps = temporal_steps
@@ -194,7 +240,8 @@ class TerrainEstimator(nn.Module):
     self.fc_mu = nn.Linear(prop_enc_hidden_dims[-1], latent_dim)
     self.fc_var = nn.Linear(prop_enc_hidden_dims[-1], latent_dim)
     self.decoder = _mlp(latent_dim, terrain_dim, dec_hidden_dims, activation)
-    self.optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+    self.learning_rate = learning_rate
+    self.optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
 
   def encode(self, obs_history: Tensor) -> Tensor:
     terrain = obs_history[:, self.history_dim : self.history_dim + self.terrain_dim]
@@ -214,8 +261,9 @@ class TerrainEstimator(nn.Module):
     gradient_sync: Callable[[Iterable[nn.Parameter]], None] | None = None,
   ):
     if lr is not None:
+      self.learning_rate = lr
       for group in self.optimizer.param_groups:
-        group["lr"] = lr
+        group["lr"] = self.learning_rate
     terrain = obs_history[
       :, self.history_dim : self.history_dim + self.terrain_dim
     ].detach()
@@ -293,7 +341,6 @@ class CMoEModel(nn.Module):
     use_estimation_loss: bool = True,
     use_latent_loss: bool = True,
     use_map_estimator: bool = False,
-    **_: Any,
   ) -> None:
     super().__init__()
     self.obs_groups = obs_groups[obs_set]
@@ -386,8 +433,9 @@ class CMoEModel(nn.Module):
     self.prototypes = nn.Embedding(num_prototypes, 16)
 
     cfg = dict(distribution_cfg or {})
-    cfg.pop("class_name", None)
-    self.distribution = GaussianDistribution(output_dim, **cfg)
+    self.distribution = CMoEGaussianDistribution(
+      output_dim, init_std=cfg.get("init_std", 1.0)
+    )
     self.gate_weights = torch.empty(0)
 
   def _obs_tensor(self, obs: TensorDictBase | Tensor, normalize: bool = True) -> Tensor:
@@ -414,9 +462,10 @@ class CMoEModel(nn.Module):
     return self._obs_tensor(obs)
 
   def _actor_input(self, obs_history: Tensor) -> Tensor:
-    explicit, latent = self.state_estimator(obs_history)
+    with torch.no_grad():
+      explicit, latent = self.state_estimator(obs_history)
+      terrain_latent = self.terrain_estimator(obs_history)
     terrain = obs_history[:, -self.terrain_dim :]
-    terrain_latent = self.terrain_estimator(obs_history)
     return torch.cat(
       (
         obs_history[:, : self.num_one_step_obs],
@@ -489,7 +538,7 @@ class CMoEModel(nn.Module):
     )
     return (*state_loss, *terrain_loss)
 
-  def compute_contrastive_loss(self, obs: TensorDictBase | Tensor, **_: Any) -> Tensor:
+  def compute_contrastive_loss(self, obs: TensorDictBase | Tensor) -> Tensor:
     obs_history = self._obs_tensor(obs).detach()
     with torch.no_grad():
       latent2 = self.terrain_estimator(obs_history)
@@ -546,21 +595,6 @@ class CMoEModel(nn.Module):
     new_params: tuple[Tensor, ...],
   ) -> Tensor:
     return self.distribution.kl_divergence(old_params, new_params)
-
-  @property
-  def action_mean(self) -> Tensor:
-    return self.output_mean
-
-  @property
-  def action_std(self) -> Tensor:
-    return self.output_std
-
-  @property
-  def entropy(self) -> Tensor:
-    return self.output_entropy
-
-  def get_actions_log_prob(self, actions: Tensor) -> Tensor:
-    return self.get_output_log_prob(actions)
 
   def as_jit(self) -> nn.Module:
     return _CMoEExport(self)
@@ -628,6 +662,7 @@ def sinkhorn(out: Tensor, eps: float = 0.05, iters: int = 3) -> Tensor:
 
 __all__ = [
   "CMoEModel",
+  "CMoEGaussianDistribution",
   "ExpertActorCritic",
   "StateEstimator",
   "TerrainEstimator",

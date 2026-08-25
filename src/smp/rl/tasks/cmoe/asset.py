@@ -35,6 +35,8 @@ LOWER_BODY_JOINTS = (
   "right_ankle_pitch_joint",
   "right_ankle_roll_joint",
 )
+LOWER_VELOCITY_LIMITS = (32.0, 20.0, 32.0, 20.0, 37.0, 37.0) * 2
+LOWER_TORQUE_LIMITS = (88.0, 139.0, 88.0, 139.0, 50.0, 50.0) * 2
 
 
 def get_cmoe_g1_spec() -> mujoco.MjSpec:
@@ -127,8 +129,17 @@ def get_cmoe_g1_robot_cfg() -> EntityCfg:
         condim={r"^(left|right)_ankle_roll_link_collision_.*$": 3, ".*": 3},
       ),
     ),
-    articulation=EntityArticulationInfoCfg(actuators=actuators),
+    articulation=EntityArticulationInfoCfg(
+      actuators=actuators,
+      soft_joint_pos_limit_factor=0.9,
+    ),
   )
 
 
-__all__ = ["LOWER_BODY_JOINTS", "get_cmoe_g1_robot_cfg", "get_cmoe_g1_spec"]
+__all__ = [
+  "LOWER_BODY_JOINTS",
+  "LOWER_TORQUE_LIMITS",
+  "LOWER_VELOCITY_LIMITS",
+  "get_cmoe_g1_robot_cfg",
+  "get_cmoe_g1_spec",
+]

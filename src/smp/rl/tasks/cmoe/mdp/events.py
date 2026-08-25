@@ -7,11 +7,17 @@ from __future__ import annotations
 
 import torch
 from mjlab.entity import Entity
-from mjlab.managers.event_manager import requires_model_fields
+from mjlab.managers.event_manager import RecomputeLevel, requires_model_fields
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.utils.lab_api.math import quat_apply
 
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
+
+
+def external_force(env) -> torch.Tensor:
+  if not hasattr(env, "cmoe_external_force"):
+    env.cmoe_external_force = torch.zeros(env.num_envs, 3, device=env.device)
+  return env.cmoe_external_force
 
 
 def hold_default_joint_targets(
@@ -39,7 +45,7 @@ def reset_joints_by_scale(
   asset: Entity = env.scene[asset_cfg.name]
   joint_ids = asset_cfg.joint_ids
   default = asset.data.default_joint_pos[env_ids][:, joint_ids]
-  scale = torch.empty(len(env_ids), 1, device=env.device).uniform_(*position_range)
+  scale = torch.empty_like(default).uniform_(*position_range)
   asset.write_joint_state_to_sim(
     default * scale,
     torch.zeros_like(default),
@@ -49,10 +55,9 @@ def reset_joints_by_scale(
 
 
 @requires_model_fields("actuator_gainprm", "actuator_biasprm")
-def randomize_motor_parameters(
+def randomize_pd_gains(
   env,
   env_ids: torch.Tensor | None,
-  motor_range: tuple[float, float],
   kp_range: tuple[float, float],
   kd_range: tuple[float, float],
   asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
@@ -63,20 +68,47 @@ def randomize_motor_parameters(
     torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
   )
   ctrl_ids = asset.indexing.ctrl_ids[asset_cfg.actuator_ids]
-  motor = torch.empty(len(env_ids), 1, device=env.device).uniform_(*motor_range)
   kp = torch.empty(len(env_ids), 1, device=env.device).uniform_(*kp_range)
   kd = torch.empty(len(env_ids), 1, device=env.device).uniform_(*kd_range)
   gain = env.sim.get_default_field("actuator_gainprm")
   bias = env.sim.get_default_field("actuator_biasprm")
-  env.sim.model.actuator_gainprm[env_ids[:, None], ctrl_ids, 0] = (
-    gain[ctrl_ids, 0] * kp * motor
+  env.sim.model.actuator_gainprm[env_ids[:, None], ctrl_ids, 0] = gain[ctrl_ids, 0] * kp
+  env.sim.model.actuator_biasprm[env_ids[:, None], ctrl_ids, 1] = bias[ctrl_ids, 1] * kp
+  env.sim.model.actuator_biasprm[env_ids[:, None], ctrl_ids, 2] = bias[ctrl_ids, 2] * kd
+
+
+@requires_model_fields(
+  "body_mass",
+  "body_ipos",
+  "body_inertia",
+  recompute=RecomputeLevel.set_const,
+)
+def randomize_base_inertial_properties(
+  env,
+  env_ids: torch.Tensor | None,
+  payload_range: tuple[float, float],
+  com_range: tuple[float, float],
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> None:
+  """Randomize base mass and COM with inertia recomputation."""
+  env_ids = (
+    torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
   )
-  env.sim.model.actuator_biasprm[env_ids[:, None], ctrl_ids, 1] = (
-    bias[ctrl_ids, 1] * kp * motor
+  body_ids = torch.as_tensor(asset_cfg.body_ids, device=env.device)
+  mass = env.sim.get_default_field("body_mass")[body_ids]
+  inertia = env.sim.get_default_field("body_inertia")[body_ids]
+  payload = torch.empty(len(env_ids), len(body_ids), device=env.device).uniform_(
+    *payload_range
   )
-  env.sim.model.actuator_biasprm[env_ids[:, None], ctrl_ids, 2] = (
-    bias[ctrl_ids, 2] * kd * motor
-  )
+  randomized_mass = mass + payload
+  env_grid, body_grid = torch.meshgrid(env_ids, body_ids, indexing="ij")
+  env.sim.model.body_mass[env_grid, body_grid] = randomized_mass
+  env.sim.model.body_ipos[env_grid, body_grid] = torch.empty(
+    len(env_ids), len(body_ids), 3, device=env.device
+  ).uniform_(*com_range)
+  env.sim.model.body_inertia[env_grid, body_grid] = inertia * (
+    randomized_mass / mass
+  ).unsqueeze(-1)
 
 
 def reset_height_scan(
@@ -90,16 +122,12 @@ def apply_external_force_local(
   env,
   env_ids: torch.Tensor,
   force_range: tuple[float, float],
-  torque_range: tuple[float, float],
   asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> None:
   """Apply the original local-frame root disturbance and retain its label."""
-  del torque_range
   asset: Entity = env.scene[asset_cfg.name]
-  if not hasattr(env, "cmoe_external_force"):
-    env.cmoe_external_force = torch.zeros(env.num_envs, 3, device=env.device)
   local_force = torch.empty(len(env_ids), 3, device=env.device).uniform_(*force_range)
-  env.cmoe_external_force[env_ids] = local_force
+  external_force(env)[env_ids] = local_force
   world_force = quat_apply(asset.data.root_link_quat_w[env_ids], local_force)
   asset.write_external_wrench_to_sim(
     world_force[:, None, :],
@@ -116,9 +144,7 @@ def clear_external_force(
 ) -> None:
   """Clear the previous one-step disturbance."""
   asset: Entity = env.scene[asset_cfg.name]
-  if not hasattr(env, "cmoe_external_force"):
-    env.cmoe_external_force = torch.zeros(env.num_envs, 3, device=env.device)
-  env.cmoe_external_force[:] = 0.0
+  external_force(env)[:] = 0.0
   asset.write_external_wrench_to_sim(
     torch.zeros(env.num_envs, 1, 3, device=env.device),
     torch.zeros(env.num_envs, 1, 3, device=env.device),
@@ -126,11 +152,30 @@ def clear_external_force(
   )
 
 
+def reset_external_force(
+  env,
+  env_ids: torch.Tensor,
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> None:
+  asset: Entity = env.scene[asset_cfg.name]
+  external_force(env)[env_ids] = 0.0
+  zeros = torch.zeros(len(env_ids), 1, 3, device=env.device)
+  asset.write_external_wrench_to_sim(
+    zeros,
+    zeros,
+    env_ids=env_ids,
+    body_ids=asset_cfg.body_ids,
+  )
+
+
 __all__ = [
   "apply_external_force_local",
   "clear_external_force",
+  "external_force",
   "hold_default_joint_targets",
-  "randomize_motor_parameters",
+  "randomize_base_inertial_properties",
+  "randomize_pd_gains",
+  "reset_external_force",
   "reset_height_scan",
   "reset_joints_by_scale",
 ]

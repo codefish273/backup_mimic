@@ -68,19 +68,14 @@ class CMoERunner(MjlabOnPolicyRunner):
     checkpoint["actor_state_dict"] = model_state
     checkpoint["critic_state_dict"] = model_state
 
-    optimizer_state = checkpoint["optimizer_state_dict"]
-    parameter_ids = optimizer_state["param_groups"][0]["params"]
-    parameter_id_by_name = dict(zip(parameter_names, parameter_ids, strict=True))
-    current_names = [name for name, _ in self.alg._raw_actor.named_parameters()]
-    optimizer_state["param_groups"][0]["params"] = [
-      parameter_id_by_name[name] for name in current_names
-    ]
-    checkpoint["state_estimator_optimizer_state_dict"] = (
-      self.alg._raw_actor.state_estimator.optimizer.state_dict()
-    )
-    checkpoint["terrain_estimator_optimizer_state_dict"] = (
-      self.alg._raw_actor.terrain_estimator.optimizer.state_dict()
-    )
+    if load_cfg is None or load_cfg.get("optimizer", True):
+      optimizer_state = checkpoint["optimizer_state_dict"]
+      parameter_ids = optimizer_state["param_groups"][0]["params"]
+      parameter_id_by_name = dict(zip(parameter_names, parameter_ids, strict=True))
+      current_names = [name for name, _ in self.alg._raw_actor.named_parameters()]
+      optimizer_state["param_groups"][0]["params"] = [
+        parameter_id_by_name[name] for name in current_names
+      ]
 
     load_iteration = self.alg.load(checkpoint, load_cfg, strict)
     if load_iteration:
