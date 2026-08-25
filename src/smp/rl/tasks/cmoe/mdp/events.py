@@ -62,15 +62,21 @@ def randomize_motor_parameters(
   env_ids = (
     torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
   )
-  del motor_range
   ctrl_ids = asset.indexing.ctrl_ids[asset_cfg.actuator_ids]
+  motor = torch.empty(len(env_ids), 1, device=env.device).uniform_(*motor_range)
   kp = torch.empty(len(env_ids), 1, device=env.device).uniform_(*kp_range)
   kd = torch.empty(len(env_ids), 1, device=env.device).uniform_(*kd_range)
   gain = env.sim.get_default_field("actuator_gainprm")
   bias = env.sim.get_default_field("actuator_biasprm")
-  env.sim.model.actuator_gainprm[env_ids[:, None], ctrl_ids, 0] = gain[ctrl_ids, 0] * kp
-  env.sim.model.actuator_biasprm[env_ids[:, None], ctrl_ids, 1] = bias[ctrl_ids, 1] * kp
-  env.sim.model.actuator_biasprm[env_ids[:, None], ctrl_ids, 2] = bias[ctrl_ids, 2] * kd
+  env.sim.model.actuator_gainprm[env_ids[:, None], ctrl_ids, 0] = (
+    gain[ctrl_ids, 0] * kp * motor
+  )
+  env.sim.model.actuator_biasprm[env_ids[:, None], ctrl_ids, 1] = (
+    bias[ctrl_ids, 1] * kp * motor
+  )
+  env.sim.model.actuator_biasprm[env_ids[:, None], ctrl_ids, 2] = (
+    bias[ctrl_ids, 2] * kd * motor
+  )
 
 
 def reset_height_scan(

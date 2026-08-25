@@ -22,6 +22,7 @@ from mjlab.terrains.terrain_generator import (
 from scipy import interpolate
 
 _HORIZONTAL_SCALE = 0.05
+_COLLISION_SCALE = 0.1
 _VERTICAL_SCALE = 0.005
 _DOWNSAMPLED_SCALE = 0.075
 _TERRAIN_SIZE = (10.0, 10.0)
@@ -45,19 +46,14 @@ CMOE_COLUMN_KINDS = (
 # Values match HumanoidCfg.terrain.terrain_dict indexes.  This is kept next
 # to the column layout so reward/termination code can use the original class.
 CMOE_TERRAIN_TYPE_BY_COLUMN = np.array(
-  [1] * 4
-  + [2] * 4
-  + [3] * 4
-  + [4] * 4
-  + [5] * 12
-  + [8] * 4
-  + [9] * 4
-  + [10] * 4,
+  [1] * 4 + [2] * 4 + [3] * 4 + [4] * 4 + [5] * 12 + [8] * 4 + [9] * 4 + [10] * 4,
   dtype=np.int64,
 )
 
 
-def _random_uniform(raw: np.ndarray, difficulty: float, rng: np.random.Generator) -> None:
+def _random_uniform(
+  raw: np.ndarray, difficulty: float, rng: np.random.Generator
+) -> None:
   max_height = (_ROUGH_HEIGHT[1] - _ROUGH_HEIGHT[0]) * difficulty + _ROUGH_HEIGHT[0]
   height = rng.uniform(_ROUGH_HEIGHT[0], max_height)
   min_height = int(-height / _VERTICAL_SCALE)
@@ -113,7 +109,9 @@ def _pyramid_stairs(raw: np.ndarray, step_height: float) -> None:
     raw[start_x:stop_x, start_y:stop_y] = height
 
 
-def _discrete_obstacles(raw: np.ndarray, difficulty: float, rng: np.random.Generator) -> None:
+def _discrete_obstacles(
+  raw: np.ndarray, difficulty: float, rng: np.random.Generator
+) -> None:
   max_height = int((0.05 + difficulty * 0.1) / _VERTICAL_SCALE)
   min_size = int(1.0 / _HORIZONTAL_SCALE)
   max_size = int(2.0 / _HORIZONTAL_SCALE)
@@ -124,7 +122,9 @@ def _discrete_obstacles(raw: np.ndarray, difficulty: float, rng: np.random.Gener
     length = int(rng.choice(width_range))
     start_i = int(rng.choice(np.arange(0, raw.shape[0] - width, 4)))
     start_j = int(rng.choice(np.arange(0, raw.shape[1] - length, 4)))
-    raw[start_i : start_i + width, start_j : start_j + length] = rng.choice(height_range)
+    raw[start_i : start_i + width, start_j : start_j + length] = rng.choice(
+      height_range
+    )
   platform = int(3.0 / _HORIZONTAL_SCALE)
   x1, x2 = (raw.shape[0] - platform) // 2, (raw.shape[0] + platform) // 2
   y1, y2 = (raw.shape[1] - platform) // 2, (raw.shape[1] + platform) // 2
@@ -135,7 +135,9 @@ def _parkour_gap(raw: np.ndarray, difficulty: float, rng: np.random.Generator) -
   mid_y = raw.shape[1] // 2
   platform_len = int(1.0 / _HORIZONTAL_SCALE)
   gap_depth = -int(rng.uniform(0.5, 1.5) / _VERTICAL_SCALE)
-  half_valid_width = int(rng.uniform(1 - 0.5 * difficulty, 1.5 - 0.5 * difficulty) / _HORIZONTAL_SCALE)
+  half_valid_width = int(
+    rng.uniform(1 - 0.5 * difficulty, 1.5 - 0.5 * difficulty) / _HORIZONTAL_SCALE
+  )
   raw[:platform_len, :] = 0
   gap_size = int((0.1 + 0.7 * difficulty) / _HORIZONTAL_SCALE)
   dis_x_min = int(0.8 / _HORIZONTAL_SCALE) + gap_size
@@ -156,7 +158,9 @@ def _parkour_gap(raw: np.ndarray, difficulty: float, rng: np.random.Generator) -
   raw[-pad:, :] = 0
 
 
-def _parkour_hurdle(raw: np.ndarray, difficulty: float, rng: np.random.Generator) -> None:
+def _parkour_hurdle(
+  raw: np.ndarray, difficulty: float, rng: np.random.Generator
+) -> None:
   platform_len = int(1.0 / _HORIZONTAL_SCALE)
   stone_len = int((0.1 + 0.2 * difficulty) / _HORIZONTAL_SCALE)
   height_min = int((0.2 * difficulty) / _VERTICAL_SCALE)
@@ -177,7 +181,9 @@ def _parkour_hurdle(raw: np.ndarray, difficulty: float, rng: np.random.Generator
   raw[-pad:, :] = 0
 
 
-def _mix_obstacles(raw: np.ndarray, difficulty: float, rng: np.random.Generator) -> None:
+def _mix_obstacles(
+  raw: np.ndarray, difficulty: float, rng: np.random.Generator
+) -> None:
   diff = difficulty * 1.1
   gap_depth = -int(rng.integers(100, 300))
   raw[:40, :] = 0
@@ -202,7 +208,9 @@ def _mix_obstacles(raw: np.ndarray, difficulty: float, rng: np.random.Generator)
   raw[:, : mid_y - 20] = gap_depth
 
 
-def _narrow_stairs(raw: np.ndarray, difficulty: float, rng: np.random.Generator) -> None:
+def _narrow_stairs(
+  raw: np.ndarray, difficulty: float, rng: np.random.Generator
+) -> None:
   mid_y = raw.shape[1] // 2
   num_stones = 24
   step_height = int(0.25 * difficulty / _VERTICAL_SCALE)
@@ -266,15 +274,18 @@ def _make_raw(kind: str, difficulty: float, rng: np.random.Generator) -> np.ndar
 
 def _heightfield_output(
   raw: np.ndarray,
-  difficulty: float,
   spec: mujoco.MjSpec,
   spawn_at_center: bool,
 ) -> TerrainOutput:
   body = spec.body("terrain")
-  minimum = int(raw.min())
-  maximum = int(raw.max())
+  # MJWarp limits each heightfield-geom pair to 50 contacts. Keep the original
+  # 5 cm generation grid and use the standard 10 cm collision resolution.
+  collision_stride = round(_COLLISION_SCALE / _HORIZONTAL_SCALE)
+  collision_raw = raw[::collision_stride, ::collision_stride]
+  minimum = int(collision_raw.min())
+  maximum = int(collision_raw.max())
   elevation_range = max(maximum - minimum, 1)
-  normalized = (raw - minimum) / elevation_range
+  normalized = (collision_raw - minimum) / elevation_range
   name = uuid.uuid4().hex
   field = spec.add_hfield(
     name=f"cmoe_hfield_{name}",
@@ -284,9 +295,9 @@ def _heightfield_output(
       elevation_range * _VERTICAL_SCALE,
       max(elevation_range * _VERTICAL_SCALE, 0.05),
     ],
-    nrow=raw.shape[0],
-    ncol=raw.shape[1],
-    userdata=normalized.astype(np.float32).flatten().tolist(),
+    nrow=collision_raw.shape[1],
+    ncol=collision_raw.shape[0],
+    userdata=normalized.T.astype(np.float32).flatten().tolist(),
   )
   material = spec.add_material(
     name=f"cmoe_terrain_material_{name}",
@@ -297,11 +308,12 @@ def _heightfield_output(
     hfieldname=field.name,
     pos=[_TERRAIN_SIZE[0] / 2, _TERRAIN_SIZE[1] / 2, minimum * _VERTICAL_SCALE],
     material=material.name,
+    friction=(0.8, 0.005, 0.0001),
   )
   if spawn_at_center:
-    x1, x2 = int(4.0 / _HORIZONTAL_SCALE), int(6.0 / _HORIZONTAL_SCALE)
-    y1, y2 = int(4.0 / _HORIZONTAL_SCALE), int(6.0 / _HORIZONTAL_SCALE)
-    spawn_height = float(raw[x1:x2, y1:y2].max() * _VERTICAL_SCALE)
+    x1, x2 = int(4.0 / _COLLISION_SCALE), int(6.0 / _COLLISION_SCALE)
+    y1, y2 = int(4.0 / _COLLISION_SCALE), int(6.0 / _COLLISION_SCALE)
+    spawn_height = float(collision_raw[x1:x2, y1:y2].max() * _VERTICAL_SCALE)
   else:
     spawn_height = 0.0
   spawn_x = _TERRAIN_SIZE[0] / 2 if spawn_at_center else 0.75
@@ -323,12 +335,17 @@ class CMoETerrainCfg(SubTerrainCfg):
     # TerrainGenerator adds a sub-row jitter. Recover the original row value.
     difficulty = np.floor(difficulty * 10.0) / 10.0
     raw = _make_raw(self.kind, difficulty, rng)
-    return _heightfield_output(raw, difficulty, spec, self.kind not in {
-      "parkour_gap",
-      "parkour_hurdle",
-      "mix",
-      "narrow_stairs",
-    })
+    return _heightfield_output(
+      raw,
+      spec,
+      self.kind
+      not in {
+        "parkour_gap",
+        "parkour_hurdle",
+        "mix",
+        "narrow_stairs",
+      },
+    )
 
 
 def cmoe_terrain_generator_cfg() -> TerrainGeneratorCfg:

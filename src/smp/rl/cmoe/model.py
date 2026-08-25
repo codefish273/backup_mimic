@@ -12,6 +12,7 @@ height map, and the terrain-estimator latent.
 from __future__ import annotations
 
 import copy
+from collections.abc import Callable, Iterable
 from typing import Any
 
 import torch
@@ -117,6 +118,7 @@ class StateEstimator(nn.Module):
     critic_obs: Tensor,
     next_critic_obs: Tensor,
     lr: float | None = None,
+    gradient_sync: Callable[[Iterable[nn.Parameter]], None] | None = None,
   ):
     if lr is not None:
       for group in self.optimizer.param_groups:
@@ -139,6 +141,8 @@ class StateEstimator(nn.Module):
     )
     self.optimizer.zero_grad()
     losses.backward()
+    if gradient_sync is not None:
+      gradient_sync(self.parameters())
     nn.utils.clip_grad_norm_(self.parameters(), self.max_grad_norm)
     self.optimizer.step()
     return (
@@ -203,7 +207,11 @@ class TerrainEstimator(nn.Module):
     return self.forward(obs_history)
 
   def update(
-    self, obs_history: Tensor, next_critic_obs: Tensor, lr: float | None = None
+    self,
+    obs_history: Tensor,
+    next_critic_obs: Tensor,
+    lr: float | None = None,
+    gradient_sync: Callable[[Iterable[nn.Parameter]], None] | None = None,
   ):
     if lr is not None:
       for group in self.optimizer.param_groups:
@@ -217,6 +225,8 @@ class TerrainEstimator(nn.Module):
     loss = self.use_latent_loss * recons_loss
     self.optimizer.zero_grad()
     loss.backward()
+    if gradient_sync is not None:
+      gradient_sync(self.parameters())
     nn.utils.clip_grad_norm_(self.parameters(), self.max_grad_norm)
     self.optimizer.step()
     return 0.0, recons_loss.item(), 0.0, 0.0
@@ -466,12 +476,17 @@ class CMoEModel(nn.Module):
     critic_obs_batch: TensorDictBase | Tensor,
     next_critic_obs_batch: TensorDictBase | Tensor,
     lr: float | None = None,
+    gradient_sync: Callable[[Iterable[nn.Parameter]], None] | None = None,
   ):
     obs = self._obs_tensor(obs_batch)
     critic_obs = self._critic_tensor(critic_obs_batch)
     next_critic_obs = self._critic_tensor(next_critic_obs_batch)
-    state_loss = self.state_estimator.update(obs, critic_obs, next_critic_obs, lr)
-    terrain_loss = self.terrain_estimator.update(obs, next_critic_obs, lr)
+    state_loss = self.state_estimator.update(
+      obs, critic_obs, next_critic_obs, lr, gradient_sync
+    )
+    terrain_loss = self.terrain_estimator.update(
+      obs, next_critic_obs, lr, gradient_sync
+    )
     return (*state_loss, *terrain_loss)
 
   def compute_contrastive_loss(self, obs: TensorDictBase | Tensor, **_: Any) -> Tensor:

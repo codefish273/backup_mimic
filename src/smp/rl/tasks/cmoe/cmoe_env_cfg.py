@@ -26,7 +26,7 @@ from mjlab.sensor import (
   TerrainHeightSensorCfg,
 )
 from mjlab.sim import MujocoCfg, SimulationCfg
-from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg, terrain_levels_vel
+from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
 from mjlab.terrains import TerrainEntityCfg
 from mjlab.viewer import ViewerConfig
 
@@ -99,7 +99,7 @@ def g1_cmoe_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     ),
     pattern=GridPatternCfg(size=(0.0, 0.0), resolution=0.1),
     ray_alignment="yaw",
-    max_distance=1.0,
+    max_distance=2.0,
     exclude_parent_body=True,
     include_geom_groups=(0,),
   )
@@ -431,7 +431,7 @@ def g1_cmoe_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     terminations=terminations,
     curriculum={
       "terrain_levels": CurriculumTermCfg(
-        func=terrain_levels_vel, params={"command_name": "twist"}
+        func=mdp.terrain_levels, params={"command_name": "twist"}
       )
     },
     viewer=ViewerConfig(
@@ -443,8 +443,6 @@ def g1_cmoe_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
       azimuth=90.0,
     ),
     sim=SimulationCfg(
-      nconmax=12000,
-      njmax=1500,
       mujoco=MujocoCfg(timestep=0.005, iterations=10, ls_iterations=20),
     ),
     decimation=4,

@@ -49,6 +49,44 @@ class CMoERunner(MjlabOnPolicyRunner):
     next_obs[done_ids] = reset_obs[done_ids]
     return next_obs
 
+  def load(
+    self,
+    path: str,
+    load_cfg: dict | None = None,
+    strict: bool = True,
+    map_location: str | None = None,
+  ) -> dict:
+    checkpoint = torch.load(path, map_location=map_location, weights_only=False)
+    if "model_state_dict" not in checkpoint:
+      return super().load(path, load_cfg, strict, map_location)
+
+    model_state = checkpoint.pop("model_state_dict")
+    parameter_names = [
+      "distribution.std_param" if name == "std" else name for name in model_state
+    ]
+    model_state["distribution.std_param"] = model_state.pop("std")
+    checkpoint["actor_state_dict"] = model_state
+    checkpoint["critic_state_dict"] = model_state
+
+    optimizer_state = checkpoint["optimizer_state_dict"]
+    parameter_ids = optimizer_state["param_groups"][0]["params"]
+    parameter_id_by_name = dict(zip(parameter_names, parameter_ids, strict=True))
+    current_names = [name for name, _ in self.alg._raw_actor.named_parameters()]
+    optimizer_state["param_groups"][0]["params"] = [
+      parameter_id_by_name[name] for name in current_names
+    ]
+    checkpoint["state_estimator_optimizer_state_dict"] = (
+      self.alg._raw_actor.state_estimator.optimizer.state_dict()
+    )
+    checkpoint["terrain_estimator_optimizer_state_dict"] = (
+      self.alg._raw_actor.terrain_estimator.optimizer.state_dict()
+    )
+
+    load_iteration = self.alg.load(checkpoint, load_cfg, strict)
+    if load_iteration:
+      self.current_learning_iteration = checkpoint["iter"]
+    return checkpoint["infos"]
+
   def learn(
     self, num_learning_iterations: int, init_at_random_ep_len: bool = False
   ) -> None:
@@ -89,9 +127,7 @@ class CMoERunner(MjlabOnPolicyRunner):
             next_critic_obs=terminal_critic_obs,
           )
           intrinsic_rewards = None
-          self.logger.process_env_step(
-            rewards, dones, step_extras, intrinsic_rewards
-          )
+          self.logger.process_env_step(rewards, dones, step_extras, intrinsic_rewards)
 
         stop = time.time()
         collect_time = stop - start

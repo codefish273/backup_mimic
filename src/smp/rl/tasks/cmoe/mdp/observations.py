@@ -169,10 +169,10 @@ def cmoe_proprio(
 def _corrupt_proprio(obs: torch.Tensor) -> torch.Tensor:
   """Apply the observation noise used by the original CMoE environment."""
   obs = obs.clone()
-  obs[:, 3:6] += torch.empty_like(obs[:, 3:6]).uniform_(-0.2, 0.2)
+  obs[:, 3:6] += torch.empty_like(obs[:, 3:6]).uniform_(-0.05, 0.05)
   obs[:, 6:9] += torch.empty_like(obs[:, 6:9]).uniform_(-0.05, 0.05)
   obs[:, 9:21] += torch.empty_like(obs[:, 9:21]).uniform_(-0.01, 0.01)
-  obs[:, 21:33] += torch.empty_like(obs[:, 21:33]).uniform_(-1.5, 1.5)
+  obs[:, 21:33] += torch.empty_like(obs[:, 21:33]).uniform_(-0.075, 0.075)
   return obs
 
 
@@ -219,6 +219,7 @@ def cmoe_height_scan(
     if isinstance(sensor, CMoERayCastSensor)
     else sensor.data.hit_pos_w[..., 2] * 5.0
   )
+  heights = heights.view(env.num_envs, 7, 11).transpose(1, 2).flatten(1)
   if not corrupt:
     return heights
 
@@ -229,7 +230,7 @@ def cmoe_height_scan(
     assert sensor._height_corrupted is not None
     return sensor._height_corrupted
 
-  heights = heights + torch.empty_like(heights).uniform_(-0.03, 0.03)
+  heights = heights + torch.empty_like(heights).uniform_(-0.15, 0.15)
   indices = torch.multinomial(
     torch.ones_like(heights), num_samples=8, replacement=False
   )

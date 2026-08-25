@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from itertools import chain
 from typing import Any
 
@@ -161,19 +162,14 @@ class CMoEPPO:
         with torch.inference_mode():
           kl = torch.sum(
             torch.log(sigma / batch.old_sigma + 1.0e-5)
-            + (
-              torch.square(batch.old_sigma)
-              + torch.square(batch.old_mu - mu)
-            )
+            + (torch.square(batch.old_sigma) + torch.square(batch.old_mu - mu))
             / (2.0 * torch.square(sigma))
             - 0.5,
             axis=-1,
           )
           kl_mean = torch.mean(kl)
           if self.is_multi_gpu:
-            torch.distributed.all_reduce(
-              kl_mean, op=torch.distributed.ReduceOp.SUM
-            )
+            torch.distributed.all_reduce(kl_mean, op=torch.distributed.ReduceOp.SUM)
             kl_mean /= self.gpu_world_size
           if self.gpu_global_rank == 0:
             if kl_mean > self.desired_kl * 2.0:
@@ -192,6 +188,7 @@ class CMoEPPO:
         batch.critic_observations,
         batch.next_critic_observations,
         lr=self.learning_rate,
+        gradient_sync=self.reduce_gradients if self.is_multi_gpu else None,
       )
       contrastive_loss = self.actor.compute_contrastive_loss(batch.observations)
 
@@ -203,9 +200,9 @@ class CMoEPPO:
       surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
 
       if self.use_clipped_value_loss:
-        value_clipped = batch.target_values + (
-          value - batch.target_values
-        ).clamp(-self.clip_param, self.clip_param)
+        value_clipped = batch.target_values + (value - batch.target_values).clamp(
+          -self.clip_param, self.clip_param
+        )
         value_losses = (value - batch.returns).pow(2)
         value_losses_clipped = (value_clipped - batch.returns).pow(2)
         value_loss = torch.max(value_losses, value_losses_clipped).mean()
@@ -327,6 +324,10 @@ class CMoEPPO:
     parameters = list(self.actor.parameters())
     if self.critic is not self.actor:
       parameters.extend(self.critic.parameters())
+    self.reduce_gradients(parameters)
+
+  def reduce_gradients(self, parameters: Iterable[nn.Parameter]) -> None:
+    parameters = list(parameters)
     gradients = [p.grad.view(-1) for p in parameters if p.grad is not None]
     all_gradients = torch.cat(gradients)
     torch.distributed.all_reduce(all_gradients, op=torch.distributed.ReduceOp.SUM)
@@ -353,9 +354,7 @@ class CMoEPPO:
     alg_class = resolve_callable(cfg["algorithm"].pop("class_name"))
     actor_class = resolve_callable(cfg["actor"].pop("class_name"))
     cfg["critic"].pop("class_name")
-    cfg["obs_groups"] = resolve_obs_groups(
-      obs, cfg["obs_groups"], ["actor", "critic"]
-    )
+    cfg["obs_groups"] = resolve_obs_groups(obs, cfg["obs_groups"], ["actor", "critic"])
     cfg["algorithm"].setdefault("rnd_cfg", None)
     cfg["algorithm"].pop("share_cnn_encoders", None)
 
