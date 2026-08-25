@@ -52,6 +52,7 @@ On Linux, install `uv` with the official standalone installer:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
+source ~/.bashrc
 uv --version
 ```
 
