@@ -11,6 +11,7 @@ import torch
 import torch.nn.functional as F
 import tyro
 from torch.utils.data import DataLoader, random_split
+from torch.utils.tensorboard import SummaryWriter
 
 from smp.pretrain.dataset import MotionWindowDataset
 from smp.pretrain.model import DiffusionDenoiser
@@ -148,12 +149,7 @@ def pretrain(cfg: PretrainCfg) -> Path:
   timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
   save_dir = Path(cfg.log_dir) / cfg.name / timestamp
   save_dir.mkdir(parents=True, exist_ok=True)
-
-  wandb_run = None
-  if cfg.use_wandb:
-    import wandb
-
-    wandb_run = wandb.init(project=cfg.wandb_project, name=cfg.name, config=vars(cfg))
+  writer = SummaryWriter(log_dir=save_dir)
 
   for epoch in range(cfg.num_epochs):
     model.train()
@@ -183,26 +179,21 @@ def pretrain(cfg: PretrainCfg) -> Path:
         eval_model, scheduler, val_loader, device, pin_memory, cfg.num_noise_samples
       )
       print(f"Epoch {epoch:4d} | train={avg_loss:.6f} | val={val_loss:.6f}")
-      if wandb_run is not None:
-        wandb_run.log({"epoch": epoch, "train/loss": avg_loss, "val/loss": val_loss})
+      writer.add_scalar("train/loss", avg_loss, epoch)
+      writer.add_scalar("val/loss", val_loss, epoch)
 
     if epoch % cfg.save_interval == 0 or epoch == cfg.num_epochs - 1:
       ckpt_path = save_dir / f"checkpoint_{epoch:05d}.pt"
       _save_checkpoint(
         ckpt_path, epoch, model, dataset, feature_dim, cfg, optimizer, ema
       )
-      if wandb_run is not None:
-        wandb_run.save(str(ckpt_path), base_path=str(save_dir))
 
   final_path = save_dir / "pretrained.pt"
   _save_checkpoint(
     final_path, cfg.num_epochs, model, dataset, feature_dim, cfg, ema=ema
   )
   print(f"Saved final checkpoint to {final_path}")
-
-  if wandb_run is not None:
-    wandb_run.save(str(final_path), base_path=str(save_dir))
-    wandb_run.finish()
+  writer.close()
 
   return final_path
 

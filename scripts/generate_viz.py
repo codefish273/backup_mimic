@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 import torch
@@ -36,43 +35,12 @@ from smp.utils import detect_device
 
 @dataclass
 class Cfg:
-  ckpt_path: str = ""
-  """Path to a local SMP diffusion checkpoint .pt file. Mutually exclusive with --wandb-run."""
-  wandb_run: str = ""
-  """W&B run path '<entity>/<project>/<run_id>'. Downloads the latest .pt from the run."""
+  ckpt_path: str
+  """Path to a local SMP diffusion checkpoint .pt file."""
   device: str = ""
   """Compute device. Empty = auto."""
   fps: float = 50.0
   """Playback frame rate."""
-
-
-def _resolve_ckpt_path(cfg: Cfg) -> str:
-  """Return a local ckpt path, downloading from wandb if --wandb-run is set."""
-  if bool(cfg.ckpt_path) == bool(cfg.wandb_run):
-    msg = "Specify exactly one of --ckpt-path or --wandb-run"
-    raise ValueError(msg)
-  if cfg.ckpt_path:
-    return cfg.ckpt_path
-
-  import wandb
-
-  api = wandb.Api()
-  run = api.run(cfg.wandb_run)
-  pt_files = [f for f in run.files() if f.name.endswith(".pt")]
-  if not pt_files:
-    msg = f"No .pt files in wandb run {cfg.wandb_run}"
-    raise FileNotFoundError(msg)
-  target = next(
-    (f for f in pt_files if Path(f.name).name == "pretrained.pt"),
-    sorted(pt_files, key=lambda f: f.name)[-1],
-  )
-  download_dir = Path("logs") / "wandb_ckpt_cache" / cfg.wandb_run.replace("/", "_")
-  download_dir.mkdir(parents=True, exist_ok=True)
-  target.download(root=str(download_dir), replace=True)
-  local = download_dir / target.name
-  print(f"Downloaded {target.name} from {cfg.wandb_run} -> {local}")
-  return str(local)
-
 
 def _build_model_and_scheduler(
   ckpt: dict, device: torch.device
@@ -162,10 +130,9 @@ def main(cfg: Cfg) -> None:
   device = torch.device(device_str)
   print(f"Device: {device_str}")
 
-  ckpt_path = _resolve_ckpt_path(cfg)
-  ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+  ckpt = torch.load(cfg.ckpt_path, map_location=device, weights_only=False)
   model, scheduler, q_low, q_high = _build_model_and_scheduler(ckpt, device)
-  print(f"Loaded checkpoint epoch={ckpt.get('epoch')} from {ckpt_path}")
+  print(f"Loaded checkpoint epoch={ckpt.get('epoch')} from {cfg.ckpt_path}")
 
   feature_dim = int(ckpt["cfg"]["feature_dim"])
   window_size = int(ckpt["cfg"]["window_size"])

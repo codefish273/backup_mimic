@@ -1,3 +1,5 @@
+[**English**](README.md) | [简体中文](README_zh-CN.md)
+
 # SMP — Score-Matching Motion Priors (reproduction)
 
 A reproduction of **SMP: Reusable Score-Matching Motion Priors for Physics-Based
@@ -38,8 +40,73 @@ points its `init_smp_state` event at the right one, so no setup is needed:
 [`uv`](https://docs.astral.sh/uv/) is the canonical package manager; dependencies
 (including the pinned `mjlab` git rev) are locked in `uv.lock`.
 
+### Prerequisites
+
+- Linux with an NVIDIA GPU and a working NVIDIA driver (`nvidia-smi` should run
+  successfully). Training is GPU-only in practice.
+- `curl` (or another supported way to install `uv`).
+
+### Install `uv`
+
+On Linux, install `uv` with the official standalone installer:
+
 ```bash
-uv sync
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv --version
+```
+
+
+### Install the project
+
+From the repository root, create `.venv` and install the exact dependencies in
+the checked-in lockfile:
+
+```bash
+cd /path/to/smp
+uv sync --frozen
+```
+
+The project targets Python 3.13 via `.python-version`; `uv` will obtain a suitable
+Python interpreter when one is not already available. The first sync downloads
+PyTorch and the GPU simulation stack and may take several minutes.
+
+Commands in this README use `uv run`, so manually activating the virtual
+environment is not required. If an activated shell is preferred, use:
+
+```bash
+source .venv/bin/activate
+```
+
+### Verify the environment
+
+First check that the driver can see the GPU:
+
+```bash
+nvidia-smi
+```
+
+Then verify the project imports and that PyTorch can access CUDA:
+
+```bash
+uv run python - <<'PY'
+import torch
+import mjlab
+import smp
+
+print("PyTorch:", torch.__version__)
+print("mjlab:", mjlab.__file__)
+print("smp:", smp.__file__)
+print("CUDA available:", torch.cuda.is_available())
+if torch.cuda.is_available():
+  print("GPU:", torch.cuda.get_device_name(0))
+PY
+```
+
+For an NVIDIA training machine, `CUDA available` should be `True`. Finally,
+confirm that the SMP task is registered and the training CLI loads:
+
+```bash
+uv run scripts/train.py Smp-Forward-G1 --help
 ```
 
 ## Pipeline
@@ -174,8 +241,13 @@ Four downstream tasks are registered with `mjlab.tasks.registry` (importing
 # Train (checkpoints land under logs/)
 uv run scripts/train.py Smp-Forward-G1 --env.scene.num-envs=4096
 
-# Play a trained policy from a W&B run
-uv run scripts/play.py Smp-Forward-G1 --wandb-run-path <org>/<project>/<run> --num-envs 4
+# View training metrics
+uv run tensorboard --logdir logs
+
+# Play a trained policy from a local checkpoint
+uv run scripts/play.py Smp-Forward-G1 \
+  --checkpoint-file logs/rsl_rl/smp_forward_g1/<run>/model_500.pt \
+  --num-envs 4
 ```
 
 Swap the task id for any of the four. Because the priors are shipped and already

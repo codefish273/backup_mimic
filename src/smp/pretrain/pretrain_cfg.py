@@ -42,12 +42,10 @@ class PretrainCfg:
 
   # Logging
   name: str = "pretrain"
-  """Run identifier; used as the wandb run name and the save subfolder."""
+  """Run identifier used as the save subfolder."""
   log_interval: int = 10
   save_interval: int = 100
   log_dir: str = "logs/pretrain"
-  wandb_project: str = "smp"
-  use_wandb: bool = True
 
   # Device
   device: str = ""

@@ -13,7 +13,7 @@ dependencies = [
   "torch<2.11.0",
   "numpy>=1.26",
   "matplotlib>=3.9",
-  "wandb>=0.19",
+  "tensorboard>=2.20",
   "tyro>=0.9",
   "scikit-learn>=1.6",
 ]
