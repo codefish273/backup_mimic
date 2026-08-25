@@ -225,7 +225,7 @@ uv run scripts/pretrain.py --data-dir datasets/npz/forward/ --num-layers 2 --no-
 
 ## RL
 
-Four downstream tasks are registered with `mjlab.tasks.registry` (importing
+Five downstream tasks are registered with `mjlab.tasks.registry` (importing
 `smp.rl.tasks` self-registers them):
 
 | Task              | Demo | Description                              |
@@ -234,6 +234,7 @@ Four downstream tasks are registered with `mjlab.tasks.registry` (importing
 | `Smp-Steering-G1` | <img src="https://raw.githubusercontent.com/SUZ-tsinghua/smp/assets/steering.gif" width="200"/> | track a commanded velocity + facing direction |
 | `Smp-Location-G1` | <img src="https://raw.githubusercontent.com/SUZ-tsinghua/smp/assets/location.gif" width="200"/> | walk to a world-frame xy goal |
 | `Smp-Getup-G1`    | <img src="https://raw.githubusercontent.com/SUZ-tsinghua/smp/assets/getup.gif" width="200"/> | stand up from a fallen pose |
+| `CMoE-G1`         | — | CMoE terrain locomotion with five contrastive experts |
 
 ### Train / play
 
@@ -250,8 +251,18 @@ uv run scripts/play.py Smp-Forward-G1 \
   --num-envs 4
 ```
 
-Swap the task id for any of the four. Because the priors are shipped and already
-wired into each env config, no editing is required before training.
+The four `Smp-*` tasks use the shipped motion priors. `CMoE-G1` is an independent
+port of [CMoE](https://github.com/Fudan-MAGIC-Lab/CMoE) and trains its five-expert
+policy, state/terrain estimators, and prototype objective end to end:
+
+```bash
+uv run scripts/train.py CMoE-G1 --env.scene.num-envs=4096
+```
+
+It retains the original 12-DoF lower-body control, 10-frame proprioceptive
+history, 77-point height scan, asymmetric critic observations, terrain
+curriculum, domain randomization, and CMoE PPO losses. It does not use an SMP
+prior checkpoint.
 
 ### Reward design: `task × SMP`
 
@@ -324,5 +335,9 @@ This repository reproduces SMP; please cite the original work and credit the
 reference implementation:
 
 - **SMP** — Mu et al., *Reusable Score-Matching Motion Priors for Physics-Based Character Control*, 2025. [arXiv:2512.03028](https://arxiv.org/abs/2512.03028)
+- **CMoE** — Ma et al., *Contrastive Mixture of Experts for Motion Control and Terrain Adaptation of Humanoid Robots*, ICRA 2026. [arXiv:2603.03067](https://arxiv.org/abs/2603.03067)
 - **MimicKit** — the original SMP implementation: <https://github.com/xbpeng/MimicKit>
 - **mjlab** — RL environment backbone: <https://github.com/mujocolab/mjlab>
+
+The migrated CMoE components retain their BSD-3-Clause notice in
+[`LICENSES/CMoE.txt`](LICENSES/CMoE.txt) and [`NOTICE`](NOTICE).

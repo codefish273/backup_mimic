@@ -176,7 +176,7 @@ uv run scripts/pretrain.py --data-dir datasets/npz/forward/ --num-layers 2 --no-
 
 ## 强化学习
 
-项目通过 `mjlab.tasks.registry` 注册四个下游任务。导入 `smp.rl.tasks` 时会自动完成注册。
+项目通过 `mjlab.tasks.registry` 注册五个下游任务。导入 `smp.rl.tasks` 时会自动完成注册。
 
 | Task | 演示 | 说明 |
 |---|:---:|---|
@@ -184,6 +184,7 @@ uv run scripts/pretrain.py --data-dir datasets/npz/forward/ --num-layers 2 --no-
 | `Smp-Steering-G1` | <img src="https://raw.githubusercontent.com/SUZ-tsinghua/smp/assets/steering.gif" width="200"/> | 跟踪指定速度和面朝方向 |
 | `Smp-Location-G1` | <img src="https://raw.githubusercontent.com/SUZ-tsinghua/smp/assets/location.gif" width="200"/> | 移动到世界坐标系中的 xy 目标位置 |
 | `Smp-Getup-G1` | <img src="https://raw.githubusercontent.com/SUZ-tsinghua/smp/assets/getup.gif" width="200"/> | 从倒地姿态恢复站立 |
+| `CMoE-G1` | — | 使用五个对比专家完成复杂地形运动 |
 
 ### 训练与播放
 
@@ -200,7 +201,16 @@ uv run scripts/play.py Smp-Forward-G1 \
   --num-envs 4
 ```
 
-将任务 ID 替换成四个任务中的任意一个即可。仓库已经提供并配置好所需先验，因此训练前无需修改环境配置。
+四个 `Smp-*` 任务使用仓库内置的运动先验。`CMoE-G1` 是
+[CMoE](https://github.com/Fudan-MAGIC-Lab/CMoE) 的独立完整迁移，会端到端训练五专家策略、
+状态/地形估计器和原型对比目标：
+
+```bash
+uv run scripts/train.py CMoE-G1 --env.scene.num-envs=4096
+```
+
+该任务保留原始的 12 自由度下肢控制、10 帧本体感知历史、77 点高度扫描、非对称 critic
+观测、地形课程、域随机化与 CMoE PPO 损失，不使用 SMP 先验 checkpoint。
 
 ### 奖励设计：`task × SMP`
 
@@ -254,5 +264,9 @@ r_smp = exp(−wₛ/|K| · Σ_{i∈K} ‖ε̂_i − ε_i‖²)
 本仓库复现了 SMP。使用本项目时，请引用原始工作并注明参考实现：
 
 - **SMP**——Mu 等，*Reusable Score-Matching Motion Priors for Physics-Based Character Control*，2025。[arXiv:2512.03028](https://arxiv.org/abs/2512.03028)
+- **CMoE**——Ma 等，*Contrastive Mixture of Experts for Motion Control and Terrain Adaptation of Humanoid Robots*，ICRA 2026。[arXiv:2603.03067](https://arxiv.org/abs/2603.03067)
 - **MimicKit**——SMP 原始实现：<https://github.com/xbpeng/MimicKit>
 - **mjlab**——强化学习环境基础框架：<https://github.com/mujocolab/mjlab>
+
+迁移后的 CMoE 组件保留 BSD-3-Clause 许可，详见
+[`LICENSES/CMoE.txt`](LICENSES/CMoE.txt) 与 [`NOTICE`](NOTICE)。

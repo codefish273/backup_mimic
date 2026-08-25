@@ -1,0 +1,11 @@
+CMoE: Contrastive Mixture of Experts for Motion Control and Terrain
+Adaptation of Humanoid Robots
+Copyright (c) 2026 The CMoE Authors (Fudan University)
+
+The CMoE-G1 task contains a MuJoCo/mjlab port of CMoE components originally
+released at https://github.com/Fudan-MAGIC-Lab/CMoE. Those components are
+distributed under the BSD 3-Clause License in LICENSES/CMoE.txt.
+
+The original implementation builds on legged_gym and rsl_rl, Copyright (c)
+2021 ETH Zurich, Nikita Rudin, and Copyright (c) 2021 NVIDIA CORPORATION &
+AFFILIATES. The estimator and actor-critic lineage also derives from HIMLoco.

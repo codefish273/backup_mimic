@@ -27,7 +27,7 @@ def g1_forward_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     resampling_time_range=(3.0, 8.0),
     rand_tar_dir=False,
     rand_face_dir=False,
-    tar_speed_min=0.5,
+    tar_speed_min=0.0,
     tar_speed_max=5.0,
     debug_vis=True,
   )
