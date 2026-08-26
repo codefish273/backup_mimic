@@ -272,20 +272,12 @@ def torque_limits(
   return torch.sum(excess, dim=1)
 
 
-tracking_linear_velocity = tracking_lin_vel
-tracking_angular_velocity = tracking_ang_vel
-
-
 def _contact_filter(env: "ManagerBasedRlEnv", sensor_name: str) -> torch.Tensor:
   """Return current contact OR previous contact, matching CMoE's filter."""
   sensor: ContactSensor = env.scene[sensor_name]
   force = sensor.data.force
-  if force is not None:
-    contact = torch.linalg.norm(force, dim=-1) > 2.0
-  else:
-    found = sensor.data.found
-    assert found is not None
-    contact = found > 0
+  assert force is not None
+  contact = torch.linalg.norm(force, dim=-1) > 2.0
   if not hasattr(env, "cmoe_contact_current"):
     env.cmoe_contact_current = torch.zeros_like(contact)
     env.cmoe_contact_previous = torch.zeros_like(contact)
@@ -320,8 +312,6 @@ __all__ = [
   "torque_limits",
   "torques",
   "tracking_ang_vel",
-  "tracking_angular_velocity",
   "tracking_lin_vel",
-  "tracking_linear_velocity",
   "tracking_yaw",
 ]

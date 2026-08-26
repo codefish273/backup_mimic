@@ -32,6 +32,7 @@ def terrain_levels(
   move_down = distance < 0.4 * threshold
   terrain.update_env_origins(env_ids, move_up, move_down)
 
+  levels = terrain.terrain_levels.float()
   return {"mean": levels.mean(), "max": levels.max()}
 
 

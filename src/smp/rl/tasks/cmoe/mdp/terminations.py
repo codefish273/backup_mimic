@@ -20,11 +20,8 @@ def time_out(env) -> torch.Tensor:
 def pelvis_contact(env, sensor_name: str) -> torch.Tensor:
   sensor: ContactSensor = env.scene[sensor_name]
   force = sensor.data.force
-  if force is not None:
-    return torch.linalg.norm(force[:, 0], dim=-1) > 1.0
-  found = sensor.data.found
-  assert found is not None
-  return found[:, 0] > 0
+  assert force is not None
+  return torch.any(torch.linalg.norm(force, dim=-1) > 1.0, dim=1)
 
 
 def bad_orientation(env, limit_angle: float, asset_cfg: SceneEntityCfg) -> torch.Tensor:

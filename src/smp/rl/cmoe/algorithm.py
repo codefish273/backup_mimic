@@ -348,10 +348,6 @@ class CMoEPPO:
     cfg["obs_groups"] = resolve_obs_groups(obs, cfg["obs_groups"], ["actor", "critic"])
     cfg["algorithm"].pop("share_cnn_encoders")
     cfg["algorithm"].pop("normalize_advantage_per_mini_batch")
-    cfg["actor"].pop("cnn_cfg")
-    cfg["actor"].pop("rnn_type")
-    cfg["actor"].pop("rnn_hidden_dim")
-    cfg["actor"].pop("rnn_num_layers")
 
     actor = actor_class(
       obs,

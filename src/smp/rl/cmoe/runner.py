@@ -68,7 +68,7 @@ class CMoERunner(MjlabOnPolicyRunner):
     checkpoint["actor_state_dict"] = model_state
     checkpoint["critic_state_dict"] = model_state
 
-    if load_cfg is None or load_cfg.get("optimizer", True):
+    if load_cfg is None or load_cfg.get("optimizer", False):
       optimizer_state = checkpoint["optimizer_state_dict"]
       parameter_ids = optimizer_state["param_groups"][0]["params"]
       parameter_id_by_name = dict(zip(parameter_names, parameter_ids, strict=True))
@@ -131,7 +131,6 @@ class CMoERunner(MjlabOnPolicyRunner):
 
       loss_dict = self.alg.update()
       stop = time.time()
-      self.current_learning_iteration = it
       self.logger.log(
         it=it,
         start_it=start_it,
@@ -146,6 +145,7 @@ class CMoERunner(MjlabOnPolicyRunner):
       if self.logger.writer is not None and it % self.cfg["save_interval"] == 0:
         self.save(os.path.join(self.logger.log_dir, f"model_{it}.pt"))
 
+    self.current_learning_iteration = total_it
     if self.logger.writer is not None:
       self.save(
         os.path.join(self.logger.log_dir, f"model_{self.current_learning_iteration}.pt")

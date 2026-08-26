@@ -178,7 +178,7 @@ def _parkour_gap(raw: np.ndarray, difficulty: float, rng: np.random.Generator) -
 def _parkour_hurdle(
   raw: np.ndarray, difficulty: float, rng: np.random.Generator
 ) -> None:
-  platform_len = round(1.0 / _HORIZONTAL_SCALE)
+  platform_len = round(2.0 / _HORIZONTAL_SCALE)
   stone_len = round((0.1 + 0.2 * difficulty) / _HORIZONTAL_SCALE)
   height_min = round((0.2 * difficulty) / _VERTICAL_SCALE)
   height_max = round((0.15 + 0.25 * difficulty) / _VERTICAL_SCALE)
@@ -232,7 +232,7 @@ def _narrow_stairs(
   num_stones = 24
   step_height = round(0.25 * difficulty / _VERTICAL_SCALE)
   half_valid_width = round((1.0 - 0.5 * difficulty) / _HORIZONTAL_SCALE)
-  platform_len = round(1.0 / _HORIZONTAL_SCALE)
+  platform_len = round(2.5 / _HORIZONTAL_SCALE)
   raw[:platform_len, :] = 0
   dis_x = platform_len
   stair_height = 0

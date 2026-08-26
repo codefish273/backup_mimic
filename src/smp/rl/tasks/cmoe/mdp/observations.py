@@ -64,12 +64,9 @@ class CMoERayCastSensor(RayCastSensor):
 
   def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
     super().reset(env_ids)
-    if env_ids is None:
-      env_ids = slice(None)
-    self._height_history[env_ids] = 0.0
-    self._height_history_valid[env_ids] = False
-    self._reset_envs[env_ids] = True
-    self._corrupt_reset_envs[env_ids] = True
+    self._height_history_valid[:] = False
+    self._reset_envs[:] = True
+    self._corrupt_reset_envs[:] = True
 
   def reset_scan_noise(self, env_ids: torch.Tensor | slice | None = None) -> None:
     if env_ids is None:
@@ -263,6 +260,7 @@ class ProprioHistory:
       self.history = torch.where(first_step[:, None, None], repeated, self.history)
       self.step = step
     elif self.reset_envs.any():
+      self.history[:, 0] = current
       self.history[self.reset_envs] = repeated[self.reset_envs]
     self.reset_envs[:] = False
     return self.history.flatten(start_dim=1)
@@ -277,7 +275,7 @@ class ProprioHistory:
       self.history[env_ids] = 0.0
       self.reset_envs[env_ids] = True
       if hasattr(self.env, "cmoe_proprio_valid"):
-        self.env.cmoe_proprio_valid[env_ids] = False
+        self.env.cmoe_proprio_valid[:] = False
 
 
 def cmoe_height_scan(

@@ -20,21 +20,6 @@ def external_force(env) -> torch.Tensor:
   return env.cmoe_external_force
 
 
-def hold_default_joint_targets(
-  env,
-  env_ids: torch.Tensor | None,
-  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
-) -> None:
-  """Keep joints outside the 12-DoF action set at their default positions."""
-  asset: Entity = env.scene[asset_cfg.name]
-  default = asset.data.default_joint_pos
-  assert default is not None
-  target = default if env_ids is None else default[env_ids]
-  asset.set_joint_position_target(
-    target, joint_ids=asset_cfg.joint_ids, env_ids=env_ids
-  )
-
-
 def reset_joints_by_scale(
   env,
   env_ids: torch.Tensor,
@@ -80,7 +65,6 @@ def randomize_pd_gains(
 @requires_model_fields(
   "body_mass",
   "body_ipos",
-  "body_inertia",
   recompute=RecomputeLevel.set_const,
 )
 def randomize_base_inertial_properties(
@@ -90,13 +74,12 @@ def randomize_base_inertial_properties(
   com_range: tuple[float, float],
   asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> None:
-  """Randomize base mass and COM with inertia recomputation."""
+  """Randomize the base mass and COM."""
   env_ids = (
     torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
   )
   body_ids = torch.as_tensor(asset_cfg.body_ids, device=env.device)
   mass = env.sim.get_default_field("body_mass")[body_ids]
-  inertia = env.sim.get_default_field("body_inertia")[body_ids]
   payload = torch.empty(len(env_ids), len(body_ids), device=env.device).uniform_(
     *payload_range
   )
@@ -106,9 +89,6 @@ def randomize_base_inertial_properties(
   env.sim.model.body_ipos[env_grid, body_grid] = torch.empty(
     len(env_ids), len(body_ids), 3, device=env.device
   ).uniform_(*com_range)
-  env.sim.model.body_inertia[env_grid, body_grid] = inertia * (
-    randomized_mass / mass
-  ).unsqueeze(-1)
 
 
 def reset_height_scan(
@@ -118,13 +98,32 @@ def reset_height_scan(
   env.scene[sensor_name].reset_scan_noise(env_ids)
 
 
+def push_robot(
+  env,
+  env_ids: torch.Tensor | None,
+  velocity_range: tuple[float, float],
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> None:
+  """Set the root XY velocity to the original CMoE push sample."""
+  if env_ids is None:
+    env_ids = torch.arange(env.num_envs, device=env.device)
+  asset: Entity = env.scene[asset_cfg.name]
+  velocity = asset.data.root_link_vel_w[env_ids].clone()
+  velocity[:, :2] = torch.empty(len(env_ids), 2, device=env.device).uniform_(
+    *velocity_range
+  )
+  asset.write_root_link_velocity_to_sim(velocity, env_ids=env_ids)
+
+
 def apply_external_force_local(
   env,
-  env_ids: torch.Tensor,
+  env_ids: torch.Tensor | None,
   force_range: tuple[float, float],
   asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> None:
   """Apply the original local-frame root disturbance and retain its label."""
+  if env_ids is None:
+    env_ids = torch.arange(env.num_envs, device=env.device)
   asset: Entity = env.scene[asset_cfg.name]
   local_force = torch.empty(len(env_ids), 3, device=env.device).uniform_(*force_range)
   external_force(env)[env_ids] = local_force
@@ -172,7 +171,7 @@ __all__ = [
   "apply_external_force_local",
   "clear_external_force",
   "external_force",
-  "hold_default_joint_targets",
+  "push_robot",
   "randomize_base_inertial_properties",
   "randomize_pd_gains",
   "reset_external_force",

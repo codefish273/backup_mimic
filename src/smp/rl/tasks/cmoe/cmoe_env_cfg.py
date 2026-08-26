@@ -101,22 +101,21 @@ def g1_cmoe_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
       pattern=("left_ankle_roll_link", "right_ankle_roll_link"),
       entity="robot",
     ),
-    fields=("found", "force", "normal", "tangent"),
-    reduce="maxforce",
+    fields=("found", "force"),
+    reduce="netforce",
     track_air_time=True,
-    global_frame=True,
   )
   collision_sensor = ContactSensorCfg(
     name="penalized_contact",
     primary=ContactMatch(mode="body", pattern=r".*(hip|knee).*", entity="robot"),
     fields=("found", "force"),
-    reduce="maxforce",
+    reduce="netforce",
   )
   pelvis_sensor = ContactSensorCfg(
     name="pelvis_contact",
-    primary=ContactMatch(mode="body", pattern="pelvis", entity="robot"),
+    primary=ContactMatch(mode="body", pattern=r".*pelvis.*", entity="robot"),
     fields=("found", "force"),
-    reduce="maxforce",
+    reduce="netforce",
   )
 
   actor_terms = {
@@ -190,7 +189,7 @@ def g1_cmoe_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
       mode="reset",
       params={
         "position_range": (0.5, 1.5),
-        "asset_cfg": lower_cfg,
+        "asset_cfg": SceneEntityCfg("robot"),
       },
     ),
     "reset_height_scan": EventTermCfg(
@@ -203,22 +202,12 @@ def g1_cmoe_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
       mode="reset",
       params={"asset_cfg": SceneEntityCfg("robot", body_names="pelvis")},
     ),
-    "hold_default_targets": EventTermCfg(
-      func=mdp.hold_default_joint_targets,
-      mode="reset",
-      params={"asset_cfg": SceneEntityCfg("robot")},
-    ),
     "push_robot": EventTermCfg(
-      func=envs_mdp.push_by_setting_velocity,
+      func=mdp.push_robot,
       mode="interval",
       interval_range_s=(16.0, 16.0),
       is_global_time=True,
-      params={
-        "velocity_range": {
-          "x": (-1.0, 1.0),
-          "y": (-1.0, 1.0),
-        }
-      },
+      params={"velocity_range": (-1.0, 1.0)},
     ),
     "clear_disturbance": EventTermCfg(
       func=mdp.clear_external_force,
@@ -228,7 +217,7 @@ def g1_cmoe_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     "disturbance": EventTermCfg(
       func=mdp.apply_external_force_local,
       mode="interval",
-      interval_range_s=(8.0, 8.0),
+      interval_range_s=(0.16, 0.16),
       is_global_time=True,
       params={
         "force_range": (-30.0, 30.0),
@@ -446,6 +435,8 @@ def g1_cmoe_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     cfg.events["base_inertial_properties"].params["payload_range"] = (0.0, 0.0)
     cfg.observations["actor"].terms["proprio"].params["corrupt"] = False
     cfg.observations["actor"].terms["height_scan"].params["corrupt"] = False
+    cfg.observations["critic"].terms["proprio"].params["corrupt"] = False
+    cfg.observations["critic"].terms["height_scan"].params["corrupt"] = False
     command = cfg.commands["twist"]
     command.resampling_time_range = (60.0, 60.0)
     command.ranges = UniformVelocityCommandCfg.Ranges(
