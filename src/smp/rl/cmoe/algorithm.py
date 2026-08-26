@@ -366,6 +366,7 @@ class CMoEPPO:
       device,
     )
     algorithm_cfg = cfg["algorithm"].copy()
+    algorithm_cfg.pop("rnd_cfg")
     algorithm = alg_class(
       actor,
       actor,

@@ -43,6 +43,7 @@ class CMoEModelCfg(RslRlModelCfg):
 @dataclass
 class CMoEPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
   class_name: str = "smp.rl.cmoe.algorithm:CMoEPPO"
+  rnd_cfg: dict[str, Any] | None = None
   value_loss_coef: float = 1.0
   use_clipped_value_loss: bool = True
   clip_param: float = 0.2
