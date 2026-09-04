@@ -1,0 +1,4 @@
+[submodule "src/smp/rl/assets/cbotv3"]
+	path = src/smp/rl/assets/cbotv3
+	url = https://gitlab.clai-lab.lan/hardware/ros2/robot_descriptions.git
+	branch = feat/smp

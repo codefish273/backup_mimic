@@ -10,5 +10,5 @@ if __name__ == "__main__":
   if any(argument.startswith("--attention-file") for argument in sys.argv):
     from smp.rl.ame.play import main
   else:
-    from mjlab.scripts.play import main
+    from smp.rl.keyboard_play import main
   main()

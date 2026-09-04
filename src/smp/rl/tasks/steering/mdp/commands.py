@@ -61,6 +61,11 @@ class SteeringCommand(CommandTerm):
     self._gui_face_angle: viser.GuiSliderHandle | None = None
     self._gui_get_env_idx: Callable[[], int] | None = None
 
+    # Native-viewer arrow-key override.  The velocity is heading-frame
+    # [forward, left] in m/s and is converted to world frame in compute().
+    self._keyboard_control = False
+    self._keyboard_velocity_b = torch.zeros(self.num_envs, 2, device=self.device)
+
   @property
   def command(self) -> torch.Tensor:
     return self.command_b
@@ -103,6 +108,55 @@ class SteeringCommand(CommandTerm):
     self.command_b[:, 0:2] = _dir_world_to_local(self.tar_dir_w, heading_w)
     self.command_b[:, 2] = self.tar_speed
     self.command_b[:, 3:5] = _dir_world_to_local(self.face_dir_w, heading_w)
+
+  def enable_keyboard_control(self) -> None:
+    """Enable persistent heading-frame velocity control for the native viewer."""
+    self._keyboard_control = True
+    self._keyboard_velocity_b.zero_()
+
+  def adjust_keyboard_velocity(
+    self,
+    env_idx: int,
+    forward_delta: float,
+    left_delta: float,
+    forward_speed_max: float = 5.0,
+  ) -> tuple[float, float]:
+    """Increment one environment's keyboard velocity and return ``(forward, left)``."""
+    velocity_b = self._keyboard_velocity_b[env_idx]
+    velocity_b[0] += forward_delta
+    velocity_b[1] += left_delta
+
+    velocity_b[0].clamp_(-forward_speed_max, forward_speed_max)
+    lateral_speed_max = float(self.cfg.tar_speed_max)
+    velocity_b[1].clamp_(-lateral_speed_max, lateral_speed_max)
+    return float(velocity_b[0]), float(velocity_b[1])
+
+  def _apply_keyboard_command(self) -> None:
+    """Convert keyboard-local velocity to the command's world-frame representation."""
+    heading_w = self.robot.data.heading_w
+    cos_h = torch.cos(heading_w)
+    sin_h = torch.sin(heading_w)
+    forward = self._keyboard_velocity_b[:, 0]
+    left = self._keyboard_velocity_b[:, 1]
+
+    velocity_w = torch.stack(
+      [cos_h * forward - sin_h * left, sin_h * forward + cos_h * left], dim=-1
+    )
+    speed = torch.linalg.vector_norm(velocity_w, dim=-1)
+    moving = speed > 1e-6
+    default_dir = torch.zeros_like(velocity_w)
+    default_dir[:, 0] = 1.0
+    self.tar_dir_w[:] = torch.where(
+      moving.unsqueeze(-1),
+      velocity_w / speed.clamp_min(1e-6).unsqueeze(-1),
+      default_dir,
+    )
+    self.tar_speed[:] = speed
+
+    # Translation is omnidirectional: arrow keys do not rotate the torso.
+    self.face_dir_w[:, 0] = cos_h
+    self.face_dir_w[:, 1] = sin_h
+    self._update_command()
 
   # GUI.
 
@@ -154,6 +208,9 @@ class SteeringCommand(CommandTerm):
 
   def compute(self, dt: float) -> None:
     super().compute(dt)
+    if self._keyboard_control:
+      self._apply_keyboard_command()
+      return
     if self._gui_enabled is None or not self._gui_enabled.value:
       return
     assert self._gui_get_env_idx is not None

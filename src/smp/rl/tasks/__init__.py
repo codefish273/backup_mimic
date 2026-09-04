@@ -11,3 +11,4 @@ from smp.rl.tasks import (
   location,  # noqa: F401  # registers Smp-Location-G1
   steering,  # noqa: F401  # registers Smp-Steering-G1 and Smp-Forward-G1
 )
+from smp.rl.tasks.config import cbotv3_2  # noqa: F401  # registers CBot tasks

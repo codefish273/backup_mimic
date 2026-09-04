@@ -48,6 +48,8 @@ def init_smp_state(
   gsi_batch_size: int = 256,
   compile_model: bool = True,
   compile_mode: str | None = None,
+  joint_names: tuple[str, ...] | None = None,
+  ee_body_names: tuple[str, ...] = EE_BODY_NAMES,
 ) -> None:
   """Startup-mode event: load the frozen denoiser, allocate the feature buffer +
   ``DiffNormalizer`` (stashed on the env), and pre-generate the GSI pool of
@@ -75,8 +77,22 @@ def init_smp_state(
     window_size,
   )
   robot = env.scene["robot"]
+  if joint_names is None:
+    env._smp_joint_indexes = slice(None)  # type: ignore[attr-defined]
+  else:
+    if len(joint_names) != NUM_JOINTS:
+      msg = f"expected {NUM_JOINTS} joint names; got {len(joint_names)}"
+      raise ValueError(msg)
+    env._smp_joint_indexes = torch.tensor(  # type: ignore[attr-defined]
+      robot.find_joints(list(joint_names), preserve_order=True)[0],
+      dtype=torch.long,
+      device=env.device,
+    )
+  if len(ee_body_names) != NUM_EE:
+    msg = f"expected {NUM_EE} end-effector body names; got {len(ee_body_names)}"
+    raise ValueError(msg)
   env._smp_ee_indexes = torch.tensor(  # type: ignore[attr-defined]
-    robot.find_bodies(list(EE_BODY_NAMES), preserve_order=True)[0],
+    robot.find_bodies(list(ee_body_names), preserve_order=True)[0],
     dtype=torch.long,
     device=env.device,
   )
@@ -172,7 +188,12 @@ def _prime_sim_and_buffer(
     dim=-1,
   )
   robot.write_root_state_to_sim(last_root_state, env_ids=env_ids)
-  robot.write_joint_state_to_sim(joint_pos[:, -1], joint_vel[:, -1], env_ids=env_ids)
+  robot.write_joint_state_to_sim(
+    joint_pos[:, -1],
+    joint_vel[:, -1],
+    joint_ids=env._smp_joint_indexes,  # type: ignore[attr-defined]
+    env_ids=env_ids,
+  )
 
   buf: MotionFeatureBuffer = env._smp_buffer  # type: ignore[attr-defined]
   buf.reset(

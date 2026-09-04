@@ -217,17 +217,25 @@ r = task · r_smp
 ### 训练与播放
 
 ```bash
-# 训练
+# G1 训练
 uv run scripts/train.py Smp-Forward-G1 --env.scene.num-envs=4096
+uv run scripts/train.py Smp-Steering-G1 --env.scene.num-envs=4096
+
+# CBotV3.2 训练（本次提交）
+uv run scripts/train.py Smp-Forward-CBot --env.scene.num-envs=4096
+uv run scripts/train.py Smp-Steering-CBot --env.scene.num-envs=4096
 
 # 查看训练指标
 uv run tensorboard --logdir logs
 
-# 播放本地 checkpoint
-uv run scripts/play.py Smp-Forward-G1 \
-  --checkpoint-file logs/rsl_rl/smp_forward_g1/<run>/model_500.pt \
-  --num-envs 4
+# 播放 CBotV3.2 本地 checkpoint
+uv run scripts/play.py Smp-Steering-CBot \
+  --checkpoint-file logs/rsl_rl/smp_steering_cbot/<run>/model_<iteration>.pt \
+  --num-envs 1 --keyboard-control
 ```
+
+键盘控制仅支持原生 viewer 和单环境：`↑/↓` 调整前进速度，`←/→` 调整横向速度。
+本次提交支持 CBotV3.2 的 SMP Forward/Steering 训练与播放；CBotV3.2 专用 pretrain 流程留待后续支持。
 
 ## 项目二：CMoE
 
