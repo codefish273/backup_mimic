@@ -1,7 +1,7 @@
 """Convert CSV motion files to windowed NPZ files.
 
 Each output NPZ contains a ``windows`` array of shape ``(N, window_size, F)``
-with the per-frame layout (59 dims for G1):
+with the per-frame layout (59 dims for G1 and CBot):
 
   root_pos        (3)              xy in last-frame heading-inv frame
                                     relative to last root; z in world
@@ -17,18 +17,27 @@ yaw-only local frame (origin at pelvis_T, x-axis = heading_T direction).
 
 Usage:
   uv run scripts/csv_to_npz.py --input-dir datasets/csv --output-dir datasets/npz
+  uv run scripts/csv_to_npz.py --robot cbot --input-dir datasets/csv_cbot/forward
+
+Headerless CSVs contain root xyz, quaternion xyzw, then joints in the selected
+robot's feature order. Named CSVs use root_x/y/z, root_qx/qy/qz/qw and
+dof_<joint_name> columns; their joints are reordered to match the RL features.
+Input FPS is inferred from sample_rate metadata or a uniform time column,
+falling back to 30 for legacy CSVs. --input-fps overrides this inference.
 """
 
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import torch
 import tyro
 from mjlab.entity import Entity
-from mjlab.scene import Scene
+from mjlab.scene import Scene, SceneCfg
 from mjlab.scripts.csv_to_npz import MotionLoader as CsvMotionLoader
 from mjlab.sim.sim import Simulation, SimulationCfg
 from mjlab.tasks.tracking.config.g1.env_cfgs import unitree_g1_flat_tracking_env_cfg
@@ -92,6 +101,8 @@ NUM_EE = len(EE_BODY_NAMES)
 
 @dataclass
 class Cfg:
+  robot: Literal["g1", "cbot"] = "g1"
+  """Robot whose model and feature order are used for FK."""
   input_dir: str = "datasets/csv"
   """Directory of input CSV motion files."""
   output_dir: str = "datasets/npz"
@@ -100,8 +111,8 @@ class Cfg:
   """Number of frames per window."""
   stride: int = 1
   """Stride between consecutive windows."""
-  input_fps: int = 30
-  """CSV frame rate."""
+  input_fps: float | None = None
+  """CSV frame rate override. Default: metadata/time column, otherwise 30 FPS."""
   output_fps: int = 50
   """Output (and sim) frame rate after interpolation."""
   device: str = ""
@@ -112,11 +123,160 @@ class Cfg:
   """Total number of shards (for parallel runs)."""
 
 
-def _setup_sim(device: str) -> tuple[Simulation, Scene]:
-  """Build the G1 sim once."""
+def _robot_config(
+  robot: str,
+) -> tuple[SceneCfg, tuple[str, ...], tuple[str, ...]]:
+  if robot == "g1":
+    return unitree_g1_flat_tracking_env_cfg().scene, JOINT_NAMES, EE_BODY_NAMES
+  if robot == "cbot":
+    try:
+      from smp.rl.assets.cbotv3.cbot_v3 import (
+        CBOT_V3_NOHEAD_EE_BODY_NAMES,
+        CBOT_V3_NOHEAD_JOINT_NAMES,
+        get_cbot_v3_nohead_pelvis_flatskin_robot_cfg,
+      )
+    except ModuleNotFoundError as exc:
+      if exc.name is None or not exc.name.startswith("smp.rl.assets.cbotv3"):
+        raise
+      msg = (
+        "CBot assets are missing. Run: "
+        "git submodule update --init --recursive src/smp/rl/assets/cbotv3"
+      )
+      raise RuntimeError(msg) from exc
+    return (
+      SceneCfg(entities={"robot": get_cbot_v3_nohead_pelvis_flatskin_robot_cfg()}),
+      CBOT_V3_NOHEAD_JOINT_NAMES,
+      CBOT_V3_NOHEAD_EE_BODY_NAMES,
+    )
+  raise ValueError(f"Unsupported robot: {robot}")
+
+
+def _read_csv_motion(
+  csv_path: Path,
+  joint_names: tuple[str, ...],
+  input_fps: float | None,
+) -> tuple[np.ndarray, float]:
+  """Read legacy or named CSVs into root xyz + xyzw + ordered joint angles."""
+  metadata: dict[str, str] = {}
+  header: list[str] | None = None
+  skiprows = 0
+  with csv_path.open(encoding="utf-8-sig", newline="") as source:
+    for line_number, line in enumerate(source, start=1):
+      stripped = line.strip()
+      if not stripped:
+        continue
+      if stripped.startswith("#"):
+        key, separator, value = stripped[1:].partition(":")
+        if separator:
+          metadata[key.strip()] = value.strip()
+        continue
+      first_row = next(csv.reader([line]))
+      try:
+        np.asarray(first_row, dtype=np.float64)
+      except ValueError:
+        header = [name.strip() for name in first_row]
+        skiprows = line_number
+      break
+
+  values = np.loadtxt(
+    csv_path, delimiter=",", skiprows=skiprows, ndmin=2, encoding="utf-8-sig"
+  )
+  if values.shape[0] < 2 or not np.isfinite(values).all():
+    raise ValueError(f"{csv_path.name}: expected at least two finite motion frames")
+
+  time_fps: float | None = None
+  if header is not None:
+    if len(set(header)) != len(header) or len(header) != values.shape[1]:
+      raise ValueError(f"{csv_path.name}: duplicate or mismatched CSV column names")
+    columns = {name: index for index, name in enumerate(header)}
+    required = [
+      "root_x",
+      "root_y",
+      "root_z",
+      "root_qx",
+      "root_qy",
+      "root_qz",
+      "root_qw",
+      *(f"dof_{name}" for name in joint_names),
+    ]
+    missing = [name for name in required if name not in columns]
+    extra = [
+      name for name in header if name.startswith("dof_") and name not in required
+    ]
+    if missing or extra:
+      raise ValueError(
+        f"{csv_path.name}: joint/root columns do not match the selected robot; "
+        f"missing={missing}, unexpected={extra}"
+      )
+    if "time" in columns:
+      steps = np.diff(values[:, columns["time"]])
+      dt = float(np.median(steps))
+      if dt <= 0 or not np.allclose(steps, dt, rtol=1e-3, atol=1e-6):
+        raise ValueError(
+          f"{csv_path.name}: time must be increasing and uniformly spaced"
+        )
+      time_fps = round(1.0 / dt, 6)
+    values = values[:, [columns[name] for name in required]]
+
+  expected_columns = 7 + len(joint_names)
+  if values.shape[1] != expected_columns:
+    raise ValueError(
+      f"{csv_path.name}: expected {expected_columns} columns "
+      f"(root xyz + quaternion xyzw + {len(joint_names)} joints), got {values.shape[1]}"
+    )
+  if np.any(np.linalg.norm(values[:, 3:7], axis=1) < 1e-6):
+    raise ValueError(f"{csv_path.name}: root quaternion must be nonzero")
+
+  fps = input_fps
+  if fps is None:
+    fps = float(metadata.get("sample_rate", time_fps if time_fps is not None else 30))
+    if time_fps is not None and not np.isclose(fps, time_fps, rtol=1e-3):
+      raise ValueError(
+        f"{csv_path.name}: sample_rate metadata disagrees with time column"
+      )
+  if not np.isfinite(fps) or fps <= 0:
+    raise ValueError(
+      f"{csv_path.name}: input FPS must be positive and finite, got {fps}"
+    )
+  return values, float(fps)
+
+
+class RobotMotionLoader(CsvMotionLoader):
+  """Adapt CSV schemas while retaining mjlab's interpolation and velocities."""
+
+  def __init__(
+    self,
+    csv_path: Path,
+    joint_names: tuple[str, ...],
+    input_fps: float | None,
+    output_fps: int,
+    device: str,
+  ) -> None:
+    self._motion_input, fps = _read_csv_motion(csv_path, joint_names, input_fps)
+    super().__init__(str(csv_path), fps, output_fps, device)
+
+  def _load_motion(self) -> None:
+    motion = torch.as_tensor(
+      self._motion_input, dtype=torch.float32, device=self.device
+    )
+    self.motion_base_poss_input = motion[:, :3]
+    self.motion_base_rots_input = motion[:, [6, 3, 4, 5]]
+    self.motion_dof_poss_input = motion[:, 7:]
+    self.input_frames = motion.shape[0]
+    self.duration = (self.input_frames - 1) * self.input_dt
+
+  def _compute_velocities(self) -> None:
+    if self.output_frames < 3:
+      raise ValueError(
+        f"{self.motion_file}: need at least three resampled frames for velocities"
+      )
+    super()._compute_velocities()
+
+
+def _setup_sim(device: str, scene_cfg: SceneCfg) -> tuple[Simulation, Scene]:
+  """Build the selected robot's sim once."""
   sim_cfg = SimulationCfg()
-  env_cfg = unitree_g1_flat_tracking_env_cfg()
-  scene = Scene(env_cfg.scene, device=device)
+  scene = Scene(scene_cfg, device=device)
   model = scene.compile()
   sim = Simulation(num_envs=1, cfg=sim_cfg, model=model, device=device)
   scene.initialize(sim.mj_model, sim.model, sim.data)
@@ -130,8 +290,9 @@ def _fk_motion(
   scene: Scene,
   joint_indexes: torch.Tensor,
   ee_indexes: torch.Tensor,
-  input_fps: int,
+  input_fps: float | None,
   output_fps: int,
+  joint_names: tuple[str, ...] = JOINT_NAMES,
 ) -> tuple[
   torch.Tensor,  # base_pos
   torch.Tensor,  # base_quat
@@ -143,8 +304,9 @@ def _fk_motion(
 ]:
   """Replay a CSV through the sim, returning interpolated base state and
   FK'd world-frame positions for the end-effector bodies."""
-  motion = CsvMotionLoader(
-    motion_file=str(csv_path),
+  motion = RobotMotionLoader(
+    csv_path=csv_path,
+    joint_names=joint_names,
     input_fps=input_fps,
     output_fps=output_fps,
     device=sim.device,
@@ -290,6 +452,10 @@ def _compute_windows(
 
 
 def main(cfg: Cfg) -> None:
+  if cfg.window_size < 1 or cfg.stride < 1 or cfg.output_fps < 1:
+    raise ValueError("window_size, stride and output_fps must be positive")
+  if cfg.num_shards < 1 or not 0 <= cfg.shard_index < cfg.num_shards:
+    raise ValueError("num_shards must be positive and 0 <= shard_index < num_shards")
   if not cfg.device:
     cfg.device = detect_device()
   print(f"Device: {cfg.device}")
@@ -306,29 +472,32 @@ def main(cfg: Cfg) -> None:
     csv_files = csv_files[cfg.shard_index :: cfg.num_shards]
     print(f"Shard {cfg.shard_index}/{cfg.num_shards}: {len(csv_files)} files")
 
-  sim, scene = _setup_sim(cfg.device)
+  scene_cfg, joint_names, ee_body_names = _robot_config(cfg.robot)
+  num_joints, num_ee = len(joint_names), len(ee_body_names)
+  sim, scene = _setup_sim(cfg.device, scene_cfg)
   robot: Entity = scene["robot"]
   joint_indexes = torch.tensor(
-    robot.find_joints(list(JOINT_NAMES), preserve_order=True)[0],
+    robot.find_joints(list(joint_names), preserve_order=True)[0],
     dtype=torch.long,
     device=sim.device,
   )
   ee_indexes = torch.tensor(
-    robot.find_bodies(list(EE_BODY_NAMES), preserve_order=True)[0],
+    robot.find_bodies(list(ee_body_names), preserve_order=True)[0],
     dtype=torch.long,
     device=sim.device,
   )
 
-  feature_dims = [3, 6, NUM_JOINTS, NUM_EE * 3, 3, 3]
+  feature_dims = [3, 6, num_joints, num_ee * 3, 3, 3]
   total_feature_dim = sum(feature_dims)
 
   print(f"Files: {len(csv_files)} in {in_dir}")
   print(f"Output: {out_dir}")
   print(f"Window: size={cfg.window_size} stride={cfg.stride} fps={cfg.output_fps}")
-  print(f"End-effectors: {NUM_EE} {EE_BODY_NAMES} | Joints: {NUM_JOINTS}")
+  print(f"Robot: {cfg.robot}")
+  print(f"End-effectors: {num_ee} {ee_body_names} | Joints: {num_joints}")
   print(
     f"Feature dim: {total_feature_dim} "
-    f"(= 3 root_pos + 6 root_rot + {NUM_JOINTS} joint_pos + {NUM_EE * 3} "
+    f"(= 3 root_pos + 6 root_rot + {num_joints} joint_pos + {num_ee * 3} "
     f"ee_pos + 3 lin_vel + 3 ang_vel)"
   )
 
@@ -350,12 +519,8 @@ def main(cfg: Cfg) -> None:
       ee_indexes,
       input_fps=cfg.input_fps,
       output_fps=cfg.output_fps,
+      joint_names=joint_names,
     )
-    if joint_pos.shape[-1] != NUM_JOINTS:
-      msg = (
-        f"{csv_path.name}: expected {NUM_JOINTS} dof columns, got {joint_pos.shape[-1]}"
-      )
-      raise ValueError(msg)
     del joint_vel
     windows = _compute_windows(
       base_pos,
@@ -378,7 +543,9 @@ def main(cfg: Cfg) -> None:
       fps=np.array([cfg.output_fps], dtype=np.float32),
       window_size=np.array([cfg.window_size], dtype=np.int32),
       stride=np.array([cfg.stride], dtype=np.int32),
-      ee_body_names=np.array(EE_BODY_NAMES),
+      robot=np.array(cfg.robot),
+      joint_names=np.array(joint_names),
+      ee_body_names=np.array(ee_body_names),
       feature_dims=np.array(feature_dims, dtype=np.int32),
     )
     print(f"  saved {out_path.name}: windows={tuple(windows.shape)}")

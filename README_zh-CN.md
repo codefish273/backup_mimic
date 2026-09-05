@@ -138,7 +138,7 @@ uv run scripts/csv_to_npz.py \
   --output-dir datasets/npz/lafan
 ```
 
-脚本会在 G1 仿真中回放动作，通过正向运动学计算末端位置，将 30 FPS 插值到 50 FPS，
+脚本默认使用 `--robot g1`，通过正向运动学计算末端位置，将 30 FPS 插值到 50 FPS，
 再切分成 `(N, window_size, 59)` 的窗口。每帧的 59 维特征为：
 
 ```text
@@ -149,6 +149,27 @@ uv run scripts/csv_to_npz.py \
 常用参数包括 `--window-size`、`--stride`、`--input-fps`、`--output-fps`，以及用于并行处理的
 `--shard-index / --num-shards`。
 
+对于 CBot V3.2，先初始化机器人资产子模块，再指定 `--robot cbot`：
+
+```bash
+git submodule update --init --recursive src/smp/rl/assets/cbotv3
+uv run scripts/csv_to_npz.py \
+  --robot cbot \
+  --input-dir datasets/csv_cbot/forward \
+  --output-dir datasets/npz_cbot/forward
+```
+
+转换器与 CBot 强化学习任务共用 29 自由度、骨盆为根节点的 FlatSkin 模型、关节顺序和 5 个末端刚体。
+输入动作必须已经重定向到 CBot。现有 `datasets/csv_cbot/` 文件含注释元数据、`time` 列、
+根位置 `root_x/y/z`、根四元数 `root_qx/qy/qz/qw` 和 `dof_<joint_name>` 关节列。
+转换时按列名重排为 `CBOT_V3_NOHEAD_JOINT_NAMES` 定义的特征顺序，包括手腕 pitch/yaw 顺序。
+输入帧率自动读取 `# sample_rate:` 或等间隔时间戳；这些 CBot 文件已经是 50 FPS。
+可以通过 `--input-fps` 显式覆盖帧率。无表头 CSV 按所选机器人的特征关节顺序读取，默认仍为 30 FPS。
+
+两种机器人均输出 `(N, window_size, 59)` 窗口，并在 NPZ 中记录 `robot`、`joint_names`、
+`ee_body_names` 和 `feature_dims`。不同机器人的 NPZ、归一化统计和预训练先验应分别保存。
+将命令中的输入、输出目录换为对应的 `lafan` 目录即可转换 CBot LAFAN 数据。
+
 计算归一化统计：
 
 ```bash
@@ -158,7 +179,7 @@ uv run scripts/compute_norm_stats.py \
 ```
 
 脚本计算各特征的 q01/q99 分位数，并将特征映射到 `[-1, 1]`。仓库已经提供基于完整 LAFAN G1
-数据集生成的 `datasets/norm_stats.npz`。除非修改了特征布局，否则建议直接复用该文件。
+数据集生成的 `datasets/norm_stats.npz`。G1 在特征布局不变时可以复用；CBot 应使用自己的 NPZ 重新计算统计。
 较宽的数据分布能够减少 PPO 探索到分布外状态时的特征饱和，避免分数估计退化。
 
 ### 扩散先验预训练
@@ -235,7 +256,8 @@ uv run scripts/play.py Smp-Steering-CBot \
 ```
 
 键盘控制仅支持原生 viewer 和单环境：`↑/↓` 调整前进速度，`←/→` 调整横向速度。
-本次提交支持 CBotV3.2 的 SMP Forward/Steering 训练与播放；CBotV3.2 专用 pretrain 流程留待后续支持。
+CBotV3.2 支持 SMP Forward/Steering 训练与播放，以及上述 CSV 到预训练窗口的转换。
+CBot 训练需要使用基于 CBot 数据训练的先验；仓库提供的 G1 先验不适合作为 CBot 专用先验。
 
 ## 项目二：CMoE
 

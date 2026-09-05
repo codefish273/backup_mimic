@@ -143,7 +143,7 @@ uv run scripts/csv_to_npz.py \
   --output-dir datasets/npz/lafan
 ```
 
-The script replays the motion in the G1 simulation, computes end-effector positions through forward
+The script defaults to `--robot g1`, computes end-effector positions through forward
 kinematics, interpolates from 30 to 50 FPS, and slices the result into `(N, window_size, 59)` windows.
 Each frame contains 59 features:
 
@@ -155,6 +155,29 @@ All spatial quantities are anchored to the pelvis position of the final window f
 yaw-only local frame. Useful options include `--window-size`, `--stride`, `--input-fps`, `--output-fps`,
 and `--shard-index / --num-shards` for parallel processing.
 
+For CBot V3.2, initialize the robot asset submodule and select `--robot cbot`:
+
+```bash
+git submodule update --init --recursive src/smp/rl/assets/cbotv3
+uv run scripts/csv_to_npz.py \
+  --robot cbot \
+  --input-dir datasets/csv_cbot/forward \
+  --output-dir datasets/npz_cbot/forward
+```
+
+This uses the same 29-DoF, pelvis-root FlatSkin model, joint order, and five end-effectors as the
+CBot RL tasks. Input motions must already be retargeted to CBot. The existing `datasets/csv_cbot/`
+files have comment metadata, a `time` column, root `root_x/y/z` and `root_qx/qy/qz/qw` columns, and
+`dof_<joint_name>` columns. The converter maps these by name into `CBOT_V3_NOHEAD_JOINT_NAMES` order,
+including the wrist pitch/yaw ordering. It infers FPS from `# sample_rate:` or uniformly spaced
+timestamps; these CBot files are already 50 FPS. `--input-fps` explicitly overrides the inferred rate.
+Headerless CSVs still use the selected robot's feature joint order and default to 30 FPS.
+
+Both robots produce `(N, window_size, 59)` windows. NPZ metadata includes `robot`, `joint_names`,
+`ee_body_names`, and `feature_dims`. Keep each robot's NPZ files, normalization statistics, and
+pretrained priors separate. The `lafan` subdirectory can be converted with the same command by
+changing the input and output directories.
+
 Compute normalization statistics:
 
 ```bash
@@ -165,7 +188,8 @@ uv run scripts/compute_norm_stats.py \
 
 The script calculates the q01/q99 quantiles for each feature and maps features into `[-1, 1]`. The
 repository already includes `datasets/norm_stats.npz`, computed from the full LAFAN G1 dataset. Reuse it
-unless the feature layout changes. Statistics from a broad motion distribution reduce feature saturation
+for G1 unless the feature layout changes; compute separate statistics from CBot NPZs for CBot.
+Statistics from a broad motion distribution reduce feature saturation
 when PPO explores out-of-distribution states and help prevent score-estimation degradation.
 
 ### Diffusion-prior pretraining
