@@ -60,7 +60,7 @@ def cbot_steering_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
   # --- Events --------------------------------------------------------------
   cfg.events["init_smp_state"].params["ckpt_path"] = (
-    "datasets/pretrain_ckpt/pretrained_lafan_run.pt"
+    "weights/pretrained.pt"
   )
 
   # --- Terminations --------------------------------------------------------
