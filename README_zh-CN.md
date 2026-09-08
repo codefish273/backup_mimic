@@ -192,13 +192,15 @@ uv run scripts/csv_to_npz.py \
   --output-dir datasets/npz/forward
 
 uv run scripts/pretrain.py \
-  --data-dir datasets/npz/forward/ \
+  --data-dir datasets/npz/lafan/ \
+  --norm-stats-file datasets/norm_stats.npz \
   --num-layers 2 \
   --no-use-ema \
   --save-interval 5000 \
   --num-epochs 10000 \
   --train-split 1.0 \
-  --d-model 128
+  --d-model 128 \
+  --device cuda:1
 ```
 
 ### 奖励设计：`task × SMP`
