@@ -310,7 +310,7 @@ def cbot_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
       func=init_smp_state,
       mode="startup",
       params={
-        "ckpt_path": "logs/pretrain/pretrained.pt",
+        "ckpt_path": "weights/pretrained.pt",
         "gsi_buffer_size": 4096,
         "gsi_batch_size": 1024,
         "compile_model": True,
