@@ -162,7 +162,8 @@ git submodule update --init --recursive src/smp/rl/assets/cbotv3
 uv run scripts/csv_to_npz.py \
   --robot cbot \
   --input-dir datasets/csv_cbot/forward \
-  --output-dir datasets/npz_cbot/forward
+  --output-dir datasets/npz_cbot/forward \
+  --input-fps 30 --output-fps 50
 ```
 
 This uses the same 29-DoF, pelvis-root FlatSkin model, joint order, and five end-effectors as the
@@ -170,13 +171,18 @@ CBot RL tasks. Input motions must already be retargeted to CBot. The existing `d
 files have comment metadata, a `time` column, root `root_x/y/z` and `root_qx/qy/qz/qw` columns, and
 `dof_<joint_name>` columns. The converter maps these by name into `CBOT_V3_NOHEAD_JOINT_NAMES` order,
 including the wrist pitch/yaw ordering. It infers FPS from `# sample_rate:` or uniformly spaced
-timestamps; these CBot files are already 50 FPS. `--input-fps` explicitly overrides the inferred rate.
+timestamps. The current CBot LAFAN/forward files have a one-to-one frame correspondence with the
+30 FPS G1 sources, despite their 50 FPS timestamps. Use `--input-fps 30 --output-fps 50` for these
+files to preserve source duration through interpolation. Other sources should use their true FPS.
 Headerless CSVs still use the selected robot's feature joint order and default to 30 FPS.
+For CPU batch conversion, `--fk-backend mujoco` computes kinematics directly with the same model.
 
 Both robots produce `(N, window_size, 59)` windows. NPZ metadata includes `robot`, `joint_names`,
 `ee_body_names`, and `feature_dims`. Keep each robot's NPZ files, normalization statistics, and
 pretrained priors separate. The `lafan` subdirectory can be converted with the same command by
 changing the input and output directories.
+Outputs also record effective input FPS, source CSV SHA256, frame counts, and FK backend.
+Run the full paired contact audit with `uv run python -m scripts.audit_lafan --output-dir outputs/lafan_audit`.
 
 Compute normalization statistics:
 
@@ -189,6 +195,9 @@ uv run scripts/compute_norm_stats.py \
 The script calculates the q01/q99 quantiles for each feature and maps features into `[-1, 1]`. The
 repository already includes `datasets/norm_stats.npz`, computed from the full LAFAN G1 dataset. Reuse it
 for G1 unless the feature layout changes; compute separate statistics from CBot NPZs for CBot.
+The duration-corrected CBot LAFAN statistics are `datasets/norm_stats_cbot_lafan_aligned.npz`.
+Use the corrected data and statistics when pretraining; rebuilding NPZs does not update existing
+diffusion or RL weights.
 Statistics from a broad motion distribution reduce feature saturation
 when PPO explores out-of-distribution states and help prevent score-estimation degradation.
 

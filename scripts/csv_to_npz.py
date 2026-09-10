@@ -29,10 +29,12 @@ falling back to 30 for legacy CSVs. --input-fps overrides this inference.
 from __future__ import annotations
 
 import csv
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+import mujoco
 import numpy as np
 import torch
 import tyro
@@ -117,6 +119,8 @@ class Cfg:
   """Output (and sim) frame rate after interpolation."""
   device: str = ""
   """Compute device. Empty = auto (cuda if available else cpu)."""
+  fk_backend: Literal["warp", "mujoco"] = "warp"
+  """FK implementation. Native MuJoCo avoids per-frame Warp overhead on CPU."""
   shard_index: int = 0
   """Index of this shard (for parallel runs). Files are sliced as [shard_index::num_shards]."""
   num_shards: int = 1
@@ -364,6 +368,47 @@ def _tan_norm_from_quat(quat: torch.Tensor) -> torch.Tensor:
   return torch.cat([col0, col2], dim=-1)
 
 
+@torch.no_grad()
+def _fk_motion_mujoco(
+  csv_path: Path,
+  model: mujoco.MjModel,
+  joint_names: tuple[str, ...],
+  ee_body_names: tuple[str, ...],
+  input_fps: float | None,
+  output_fps: int,
+) -> tuple[torch.Tensor, ...]:
+  """Use the same interpolation/features with native CPU kinematics only."""
+  motion = RobotMotionLoader(csv_path, joint_names, input_fps, output_fps, "cpu")
+  free_joints = np.flatnonzero(model.jnt_type == mujoco.mjtJoint.mjJNT_FREE)
+  if len(free_joints) != 1:
+    raise ValueError("Native motion FK requires exactly one floating robot")
+  root_address = int(model.jnt_qposadr[free_joints[0]])
+  joint_addresses = np.array(
+    [model.jnt_qposadr[model.joint(f"robot/{name}").id] for name in joint_names]
+  )
+  ee_ids = np.array([model.body(f"robot/{name}").id for name in ee_body_names])
+  data = mujoco.MjData(model)
+  positions = motion.motion_base_poss.numpy()
+  quaternions = motion.motion_base_rots.numpy()
+  joints = motion.motion_dof_poss.numpy()
+  ee_positions = np.empty((motion.output_frames, len(ee_ids), 3), dtype=np.float32)
+  for index in range(motion.output_frames):
+    data.qpos[root_address : root_address + 3] = positions[index]
+    data.qpos[root_address + 3 : root_address + 7] = quaternions[index]
+    data.qpos[joint_addresses] = joints[index]
+    mujoco.mj_kinematics(model, data)
+    ee_positions[index] = data.xpos[ee_ids]
+  return (
+    motion.motion_base_poss,
+    motion.motion_base_rots,
+    motion.motion_base_lin_vels,
+    motion.motion_base_ang_vels,
+    torch.from_numpy(ee_positions),
+    motion.motion_dof_poss,
+    motion.motion_dof_vels,
+  )
+
+
 def _compute_windows(
   base_pos: torch.Tensor,
   base_quat: torch.Tensor,
@@ -456,7 +501,9 @@ def main(cfg: Cfg) -> None:
     raise ValueError("window_size, stride and output_fps must be positive")
   if cfg.num_shards < 1 or not 0 <= cfg.shard_index < cfg.num_shards:
     raise ValueError("num_shards must be positive and 0 <= shard_index < num_shards")
-  if not cfg.device:
+  if cfg.fk_backend == "mujoco":
+    cfg.device = "cpu"
+  elif not cfg.device:
     cfg.device = detect_device()
   print(f"Device: {cfg.device}")
 
@@ -474,18 +521,21 @@ def main(cfg: Cfg) -> None:
 
   scene_cfg, joint_names, ee_body_names = _robot_config(cfg.robot)
   num_joints, num_ee = len(joint_names), len(ee_body_names)
-  sim, scene = _setup_sim(cfg.device, scene_cfg)
-  robot: Entity = scene["robot"]
-  joint_indexes = torch.tensor(
-    robot.find_joints(list(joint_names), preserve_order=True)[0],
-    dtype=torch.long,
-    device=sim.device,
-  )
-  ee_indexes = torch.tensor(
-    robot.find_bodies(list(ee_body_names), preserve_order=True)[0],
-    dtype=torch.long,
-    device=sim.device,
-  )
+  if cfg.fk_backend == "mujoco":
+    native_model = Scene(scene_cfg, device="cpu").compile()
+  else:
+    sim, scene = _setup_sim(cfg.device, scene_cfg)
+    robot: Entity = scene["robot"]
+    joint_indexes = torch.tensor(
+      robot.find_joints(list(joint_names), preserve_order=True)[0],
+      dtype=torch.long,
+      device=sim.device,
+    )
+    ee_indexes = torch.tensor(
+      robot.find_bodies(list(ee_body_names), preserve_order=True)[0],
+      dtype=torch.long,
+      device=sim.device,
+    )
 
   feature_dims = [3, 6, num_joints, num_ee * 3, 3, 3]
   total_feature_dim = sum(feature_dims)
@@ -503,6 +553,26 @@ def main(cfg: Cfg) -> None:
 
   for i, csv_path in enumerate(csv_files):
     print(f"\n[{i + 1}/{len(csv_files)}] {csv_path.name}")
+    if cfg.fk_backend == "mujoco":
+      states = _fk_motion_mujoco(
+        csv_path,
+        native_model,
+        joint_names,
+        ee_body_names,
+        cfg.input_fps,
+        cfg.output_fps,
+      )
+    else:
+      states = _fk_motion(
+        csv_path,
+        sim,
+        scene,
+        joint_indexes,
+        ee_indexes,
+        input_fps=cfg.input_fps,
+        output_fps=cfg.output_fps,
+        joint_names=joint_names,
+      )
     (
       base_pos,
       base_quat,
@@ -511,16 +581,7 @@ def main(cfg: Cfg) -> None:
       ee_pos,
       joint_pos,
       joint_vel,
-    ) = _fk_motion(
-      csv_path,
-      sim,
-      scene,
-      joint_indexes,
-      ee_indexes,
-      input_fps=cfg.input_fps,
-      output_fps=cfg.output_fps,
-      joint_names=joint_names,
-    )
+    ) = states
     del joint_vel
     windows = _compute_windows(
       base_pos,
@@ -537,6 +598,7 @@ def main(cfg: Cfg) -> None:
       continue
 
     out_path = out_dir / f"{csv_path.stem}.npz"
+    source_values, input_fps = _read_csv_motion(csv_path, joint_names, cfg.input_fps)
     np.savez_compressed(
       out_path,
       windows=windows.cpu().numpy().astype(np.float32),
@@ -547,6 +609,14 @@ def main(cfg: Cfg) -> None:
       joint_names=np.array(joint_names),
       ee_body_names=np.array(ee_body_names),
       feature_dims=np.array(feature_dims, dtype=np.int32),
+      input_fps=np.array(input_fps, dtype=np.float64),
+      input_fps_overridden=np.array(cfg.input_fps is not None),
+      input_frame_count=np.array(len(source_values), dtype=np.int64),
+      resampled_frame_count=np.array(len(base_pos), dtype=np.int64),
+      input_duration_s=np.array((len(source_values) - 1) / input_fps),
+      source_csv=np.array(str(csv_path)),
+      source_csv_sha256=np.array(hashlib.sha256(csv_path.read_bytes()).hexdigest()),
+      fk_backend=np.array(cfg.fk_backend),
     )
     print(f"  saved {out_path.name}: windows={tuple(windows.shape)}")
 

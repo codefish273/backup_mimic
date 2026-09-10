@@ -1,7 +1,7 @@
 """Compute per-feature q01/q99 quantiles from all NPZ window files.
 
-Scans all ``*.npz`` files in the input directory, concatenates all windows,
-and computes the 1st and 99th percentile per feature dimension. Saves the
+Scans all ``*.npz`` files, stages windows on disk, and computes exact 1st/99th
+percentiles one feature at a time with bounded memory. Saves the
 result as a small ``.npz`` file for use by the training loop and RL reward.
 
 Usage:
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import numpy as np
 import tyro
@@ -35,19 +36,43 @@ def main(cfg: Cfg) -> None:
   if not npz_files:
     raise FileNotFoundError(f"No NPZ files in {in_dir}")
 
-  chunks: list[np.ndarray] = []
+  shapes: list[tuple[int, int]] = []
   for f in npz_files:
     with np.load(f, allow_pickle=False) as data:
       windows = data["windows"]  # (N, W, F)
       # Flatten window dim → treat each frame independently.
-      chunks.append(windows.reshape(-1, windows.shape[-1]))
+      shapes.append((windows.shape[0] * windows.shape[1], windows.shape[2]))
       print(f"  {f.name}: {windows.shape[0]} windows, {windows.shape[-1]} features")
 
-  all_frames = np.concatenate(chunks, axis=0).astype(np.float64)
-  print(f"\nTotal frames: {all_frames.shape[0]}, feature dim: {all_frames.shape[1]}")
-
-  q_low = np.percentile(all_frames, cfg.q_low * 100, axis=0).astype(np.float32)
-  q_high = np.percentile(all_frames, cfg.q_high * 100, axis=0).astype(np.float32)
+  feature_dim = shapes[0][1]
+  if any(shape[1] != feature_dim for shape in shapes):
+    raise ValueError("NPZ files have inconsistent feature dimensions")
+  num_frames = sum(shape[0] for shape in shapes)
+  print(f"\nTotal frames: {num_frames}, feature dim: {feature_dim}")
+  # Keep exact quantiles without retaining the entire dataset in RAM.
+  with TemporaryDirectory(prefix="smp_norm_stats_") as temporary:
+    all_frames = np.memmap(
+      Path(temporary) / "frames.bin",
+      mode="w+",
+      dtype=np.float32,
+      shape=(num_frames, feature_dim),
+    )
+    offset = 0
+    for path, (count, _) in zip(npz_files, shapes, strict=True):
+      with np.load(path, allow_pickle=False) as data:
+        all_frames[offset : offset + count] = data["windows"].reshape(
+          count, feature_dim
+        )
+      offset += count
+    all_frames.flush()
+    q_low = np.empty(feature_dim, dtype=np.float32)
+    q_high = np.empty(feature_dim, dtype=np.float32)
+    for index in range(feature_dim):
+      q_low[index], q_high[index] = np.percentile(
+        all_frames[:, index].astype(np.float64),
+        [cfg.q_low * 100, cfg.q_high * 100],
+      )
+    del all_frames
 
   # Prevent zero-range (constant features) → set a minimum span.
   span = q_high - q_low

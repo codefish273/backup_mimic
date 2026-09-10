@@ -156,19 +156,28 @@ git submodule update --init --recursive src/smp/rl/assets/cbotv3
 uv run scripts/csv_to_npz.py \
   --robot cbot \
   --input-dir datasets/csv_cbot/forward \
-  --output-dir datasets/npz_cbot/forward
+  --output-dir datasets/npz_cbot/forward \
+  --input-fps 30 --output-fps 50
 ```
 
 转换器与 CBot 强化学习任务共用 29 自由度、骨盆为根节点的 FlatSkin 模型、关节顺序和 5 个末端刚体。
 输入动作必须已经重定向到 CBot。现有 `datasets/csv_cbot/` 文件含注释元数据、`time` 列、
 根位置 `root_x/y/z`、根四元数 `root_qx/qy/qz/qw` 和 `dof_<joint_name>` 关节列。
 转换时按列名重排为 `CBOT_V3_NOHEAD_JOINT_NAMES` 定义的特征顺序，包括手腕 pitch/yaw 顺序。
-输入帧率自动读取 `# sample_rate:` 或等间隔时间戳；这些 CBot 文件已经是 50 FPS。
-可以通过 `--input-fps` 显式覆盖帧率。无表头 CSV 按所选机器人的特征关节顺序读取，默认仍为 30 FPS。
+输入帧率自动读取 `# sample_rate:` 或等间隔时间戳。当前仓库的 CBot LAFAN/forward CSV
+与 30 FPS 的 G1 源文件逐帧对应，但时间戳标为 50 FPS，因此这些文件需要显式指定
+`--input-fps 30 --output-fps 50`，通过插值保留源动作时长。其它来源使用其真实采样帧率。
+无表头 CSV 按所选机器人的特征关节顺序读取，默认仍为 30 FPS。
+CPU 批量转换可加 `--fk-backend mujoco`，直接计算相同模型的运动学。
 
 两种机器人均输出 `(N, window_size, 59)` 窗口，并在 NPZ 中记录 `robot`、`joint_names`、
 `ee_body_names` 和 `feature_dims`。不同机器人的 NPZ、归一化统计和预训练先验应分别保存。
 将命令中的输入、输出目录换为对应的 `lafan` 目录即可转换 CBot LAFAN 数据。
+输出还记录输入帧率、源 CSV SHA256、输入/输出帧数与 FK 后端。配对数据全量审计命令：
+
+```bash
+uv run python -m scripts.audit_lafan --output-dir outputs/lafan_audit
+```
 
 计算归一化统计：
 
@@ -180,6 +189,8 @@ uv run scripts/compute_norm_stats.py \
 
 脚本计算各特征的 q01/q99 分位数，并将特征映射到 `[-1, 1]`。仓库已经提供基于完整 LAFAN G1
 数据集生成的 `datasets/norm_stats.npz`。G1 在特征布局不变时可以复用；CBot 应使用自己的 NPZ 重新计算统计。
+恢复时长后的 CBot LAFAN 统计文件为 `datasets/norm_stats_cbot_lafan_aligned.npz`。
+预训练时应使用修正后的数据与该统计；重建 NPZ 不会更新现有扩散先验或 RL 权重。
 较宽的数据分布能够减少 PPO 探索到分布外状态时的特征饱和，避免分数估计退化。
 
 ### 扩散先验预训练
