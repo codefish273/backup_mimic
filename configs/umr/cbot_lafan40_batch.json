@@ -1,0 +1,21 @@
+{
+  "batch": {
+    "motion_folder": "/home/zirui/mimic_clai/outputs/umr_lafan40/smplx",
+    "patterns": ["*.npz"],
+    "recursive": false,
+    "workers": 3,
+    "correspondence_workers": 1,
+    "retarget_cpu_threads": 1,
+    "retarget_gpus": "0",
+    "output_root": "/home/zirui/mimic_clai/outputs/umr_lafan40/retarget",
+    "temp_config_root": "/home/zirui/mimic_clai/outputs/umr_lafan40/configs",
+    "keep_temp_configs": true,
+    "skip_existing": true,
+    "compact_log": true,
+    "progress_bars": false,
+    "tail_lines_on_error": 30
+  },
+  "motion": {"start": 0, "end": -1, "stride": 1, "max_frames": 0},
+  "solver": {"trajectory_warm_start_mode": "sequential"},
+  "retarget": {"stream_chunk_frames": 300, "decoupled_source_preprocess": false}
+}

@@ -1,0 +1,52 @@
+{
+  "extends": "/home/zirui/下载/UMR/humanoid_retarget_defaults.json",
+  "smplx_model_dir": "/home/zirui/下载/models_smplx_v1_1/models/smplx",
+  "robot": {
+    "name": "cbot_v3_pelvis_flatskin",
+    "xml": "/home/zirui/mimic_clai/src/smp/rl/assets/cbotv3/cbot_v3/mjcf/cbot_v3_29dof_flatskin_pelvis.xml",
+    "point_cloud_center": "body:pelvis",
+    "xml_policy": {"add_freejoint_root": false},
+    "tpose_qpos": {
+      "left_shoulder_roll_joint": 1.57079632679,
+      "right_shoulder_roll_joint": -1.57079632679,
+      "left_elbow_joint": 1.55,
+      "right_elbow_joint": 1.55
+    },
+    "joint_limits": {
+      "left_knee_pitch_joint": ["-inf", -0.03],
+      "right_knee_pitch_joint": ["-inf", -0.03]
+    }
+  },
+  "correspondence": {
+    "dataset": {
+      "out": "/home/zirui/mimic_clai/outputs/umr_cbot/correspondence_dataset.npz",
+      "smpl_models": [
+        {
+          "type": "smplx",
+          "dir": "/home/zirui/下载/models_smplx_v1_1/models/smplx",
+          "genders": ["neutral"]
+        }
+      ]
+    },
+    "train": {
+      "out_dir": "/home/zirui/mimic_clai/outputs/umr_cbot/correspondence",
+      "device": "cuda",
+      "epochs": 500,
+      "log_every": 50
+    }
+  },
+  "motion": {
+    "data": "/home/zirui/下载/UMR/sample_data/lafan1_smplx",
+    "seq_key": "dance1_subject2",
+    "start": 0,
+    "end": 300,
+    "max_frames": 300
+  },
+  "retarget": {
+    "out": "/home/zirui/mimic_clai/outputs/umr_cbot/dance1_subject2_first300.npz",
+    "smplx_device": "cuda",
+    "smplx_batch_size": 64,
+    "smplx_batch_size_max": 128
+  },
+  "view": {"enabled": false}
+}

@@ -1,0 +1,15 @@
+{
+  "extends": "./cbot_lafan_full.json",
+  "motion": {
+    "data": "/home/zirui/mimic_clai/outputs/umr_lafan40/smplx",
+    "start": 0,
+    "end": -1,
+    "max_frames": 0
+  },
+  "retarget": {
+    "source_ground_align": "none",
+    "smplx_device": "cuda",
+    "smplx_batch_size": 64,
+    "smplx_batch_size_max": 128
+  }
+}

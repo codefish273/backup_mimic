@@ -79,7 +79,7 @@ def cbot_smp_ppo_runner_cfg():
       max_grad_norm=1.0,
     ),
     experiment_name="cbot_tracking",
-    save_interval=500,
+    save_interval=1000,
     num_steps_per_env=24,
     max_iterations=30_000,
     logger="tensorboard",

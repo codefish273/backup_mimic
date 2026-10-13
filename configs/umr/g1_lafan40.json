@@ -1,0 +1,43 @@
+{
+  "extends": "/home/zirui/下载/UMR/robot_configs/humanoid_retarget_unitree_g1_example.json",
+  "smplx_model_dir": "/home/zirui/下载/models_smplx_v1_1/models/smplx",
+  "robot": {
+    "name": "unitree_g1",
+    "xml": "/home/zirui/下载/UMR/assets/g1/g1_29dof.xml",
+    "xml_policy": {"add_freejoint_root": false}
+  },
+  "correspondence": {
+    "dataset": {
+      "out": "/home/zirui/mimic_clai/outputs/umr_g1_lafan40/correspondence_dataset.npz",
+      "smpl_models": [{
+        "type": "smplx",
+        "dir": "/home/zirui/下载/models_smplx_v1_1/models/smplx",
+        "genders": ["neutral"]
+      }]
+    },
+    "train": {
+      "out_dir": "/home/zirui/mimic_clai/outputs/umr_g1_lafan40/correspondence",
+      "device": "cuda",
+      "epochs": 500,
+      "log_every": 50
+    }
+  },
+  "motion": {
+    "data": "/home/zirui/mimic_clai/outputs/umr_lafan40/smplx",
+    "seq_key": "run1_subject2",
+    "start": 0,
+    "end": -1,
+    "max_frames": 0
+  },
+  "solver": {"trajectory_warm_start_mode": "sequential"},
+  "retarget": {
+    "out": "/home/zirui/mimic_clai/outputs/umr_g1_lafan40/run1_subject2.npz",
+    "source_ground_align": "none",
+    "smplx_device": "cuda",
+    "smplx_batch_size": 64,
+    "smplx_batch_size_max": 128,
+    "stream_chunk_frames": 300,
+    "decoupled_source_preprocess": false
+  },
+  "view": {"enabled": false}
+}

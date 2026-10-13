@@ -1,0 +1,12 @@
+diff --git a/scripts/retarget_smpl_to_humanoid_surface_vector_batch.py b/scripts/retarget_smpl_to_humanoid_surface_vector_batch.py
+--- a/scripts/retarget_smpl_to_humanoid_surface_vector_batch.py
++++ b/scripts/retarget_smpl_to_humanoid_surface_vector_batch.py
+@@ -389,7 +389,7 @@
+     set_default(args, "trajectory_filter_anchor_end_frames", solver.get("trajectory_filter_anchor_end_frames", 1))
+     # Batch retargeting favors robustness to occasional singularities: solve
+     # both temporal directions and let the downstream DP select a smooth path.
+-    set_default(args, "trajectory_warm_start_mode", "bidirectional")
++    set_default(args, "trajectory_warm_start_mode", solver.get("trajectory_warm_start_mode", "bidirectional"))
+     set_default(
+         args,
+         "trajectory_warm_start_bidirectional_continuity_cost",

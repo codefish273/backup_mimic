@@ -1,0 +1,11 @@
+{
+  "extends": "./cbot_lafan.json",
+  "motion": {
+    "start": 0,
+    "end": -1,
+    "max_frames": 0
+  },
+  "retarget": {
+    "out": "/home/zirui/mimic_clai/outputs/umr_cbot/dance1_subject2_full.npz"
+  }
+}
